@@ -1,0 +1,33 @@
+# ============================================================
+# GPLv3 参考克隆——绝不纳入版本库，也绝不推送到 GitHub
+# （SQLBot 为 modified-GPLv3，仅作设计参考，clean-room 重写，不复制源码）
+# ============================================================
+SQLBot/
+
+# Python 虚拟环境与字节码
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+
+# 测试 / 类型 / lint 缓存
+.pytest_cache/
+.hypothesis/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# IDE
+.idea/
+.vscode/
+
+# 从 docx 等提取的临时文本文件
+_*.txt
+
+# 操作系统杂项
+.DS_Store
+Thumbs.db

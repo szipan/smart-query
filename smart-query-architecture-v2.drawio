@@ -1,0 +1,235 @@
+<mxfile host="Electron">
+  <diagram name="smart-query-v2" id="smart_query_v2">
+    <mxGraphModel dx="1400" dy="800" grid="0" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="0" pageScale="1" pageWidth="1200" pageHeight="1160" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+
+        <mxCell id="title" parent="1" vertex="1" style="text;html=1;align=center;fontSize=18;verticalAlign=middle;" value="&lt;b&gt;智能问数系统架构图 v2（落地版：AgentCore Memory 多轮 · 自研 sqlglot 隔离 · 向量栈可替换）&lt;/b&gt;">
+          <mxGeometry height="40" width="820" x="40" y="10" as="geometry" />
+        </mxCell>
+
+        <mxCell id="L1" parent="1" vertex="1" style="swimlane;startSize=26;fillColor=#f5f5f5;strokeColor=#666666;html=1;fontSize=13;" value="Layer 1: 客户端（统一走 REST）">
+          <mxGeometry height="90" width="780" x="0" y="70" as="geometry" />
+        </mxCell>
+        <mxCell id="mobile" parent="L1" vertex="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1f5fe;strokeColor=#0288d1;" value="iOS / Android">
+          <mxGeometry height="45" width="140" x="120" y="34" as="geometry" />
+        </mxCell>
+        <mxCell id="web" parent="L1" vertex="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1f5fe;strokeColor=#0288d1;" value="Web 端">
+          <mxGeometry height="45" width="140" x="340" y="34" as="geometry" />
+        </mxCell>
+
+        <mxCell id="L2" parent="1" vertex="1" style="swimlane;startSize=26;fillColor=#e8f5e9;strokeColor=#388e3c;html=1;fontSize=12;" value="Layer 2: api-gateway（Amazon API Gateway + 薄 Lambda）">
+          <mxGeometry height="95" width="780" x="0" y="185" as="geometry" />
+        </mxCell>
+        <mxCell id="rest_api" parent="L2" vertex="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#c8e6c9;strokeColor=#388e3c;" value="REST API&lt;br&gt;POST /v1/query">
+          <mxGeometry height="48" width="150" x="55" y="36" as="geometry" />
+        </mxCell>
+        <mxCell id="auth_verify" parent="L2" vertex="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#c8e6c9;strokeColor=#388e3c;" value="Token 验证 &amp; 限流">
+          <mxGeometry height="48" width="150" x="300" y="36" as="geometry" />
+        </mxCell>
+        <mxCell id="router" parent="L2" vertex="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#c8e6c9;strokeColor=#388e3c;" value="请求路由&lt;br&gt;(Legacy / Query)">
+          <mxGeometry height="48" width="170" x="560" y="36" as="geometry" />
+        </mxCell>
+
+        <mxCell id="L3" parent="1" vertex="1" style="swimlane;startSize=26;fillColor=#e3f2fd;strokeColor=#1565c0;html=1;fontSize=12;" value="Layer 3: query-engine（核心引擎，跑在 EKS 的 Python 服务）">
+          <mxGeometry height="345" width="780" x="0" y="305" as="geometry" />
+        </mxCell>
+        <mxCell id="orchestrator" parent="L3" vertex="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#bbdefb;strokeColor=#1565c0;fontSize=11;" value="&lt;b&gt;查询编排器&lt;/b&gt;">
+          <mxGeometry height="48" width="95" x="12" y="36" as="geometry" />
+        </mxCell>
+        <mxCell id="ctx_rewrite" parent="L3" vertex="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff59d;strokeColor=#f57f17;fontSize=10;strokeWidth=2;" value="&lt;b&gt;上下文改写 / 指代消解&lt;/b&gt;&lt;br&gt;&lt;font color=&quot;#666&quot; style=&quot;font-size:9px&quot;&gt;多轮追问补全为独立问题&lt;/font&gt;&lt;br&gt;&lt;b style=&quot;color:#f57f17&quot;&gt;★ 新增（AgentCore Memory）&lt;/b&gt;">
+          <mxGeometry height="58" width="170" x="120" y="31" as="geometry" />
+        </mxCell>
+        <mxCell id="term_norm" parent="L3" vertex="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#bbdefb;strokeColor=#1565c0;fontSize=9;" value="&lt;b&gt;术语归一化&lt;/b&gt;&lt;br&gt;&lt;font color=&quot;#444&quot;&gt;硬：实体字典(精确)&lt;br&gt;软：术语库(SQLBot,LLM)&lt;/font&gt;">
+          <mxGeometry height="58" width="165" x="305" y="31" as="geometry" />
+        </mxCell>
+        <mxCell id="sem_cache" parent="L3" vertex="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#bbdefb;strokeColor=#1565c0;fontSize=9;" value="&lt;b&gt;① 语义复用缓存&lt;/b&gt;&lt;br&gt;&lt;font color=&quot;#444&quot;&gt;VectorStore(可替换)&lt;br&gt;当前 OpenSearch，阈值0.95&lt;br&gt;命中→输出&lt;b&gt;隔离前 SQL&lt;/b&gt;&lt;/font&gt;">
+          <mxGeometry height="62" width="180" x="490" y="29" as="geometry" />
+        </mxCell>
+
+        <mxCell id="L4" parent="L3" vertex="1" style="swimlane;startSize=22;fillColor=#e8eaf6;strokeColor=#3949ab;html=1;fontSize=11;" value="Layer 4: Text-to-SQL Pipeline（插拔式，未命中缓存时）">
+          <mxGeometry height="215" width="754" x="12" y="112" as="geometry" />
+        </mxCell>
+        <mxCell id="sl" parent="L4" vertex="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#c5cae9;strokeColor=#3949ab;fontSize=9;" value="&lt;b&gt;① Schema Linking&lt;/b&gt;&lt;br&gt;&lt;i&gt;默认 RAG 检索&lt;/i&gt;&lt;br&gt;&lt;font color=&quot;#666&quot;&gt;可选 M-Schema&lt;br&gt;NL Semantic Layer&lt;/font&gt;">
+          <mxGeometry height="120" width="165" x="12" y="40" as="geometry" />
+        </mxCell>
+        <mxCell id="gen" parent="L4" vertex="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#c5cae9;strokeColor=#3949ab;fontSize=9;" value="&lt;b&gt;② SQL Generation&lt;/b&gt;&lt;br&gt;&lt;i&gt;默认单 LLM (Sonnet)&lt;/i&gt;&lt;br&gt;&lt;font color=&quot;#666&quot;&gt;可选多生成器&lt;br&gt;Gated 路由 / RLVR&lt;/font&gt;">
+          <mxGeometry height="120" width="165" x="200" y="40" as="geometry" />
+        </mxCell>
+        <mxCell id="sel" parent="L4" vertex="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#c5cae9;strokeColor=#3949ab;fontSize=9;" value="&lt;b&gt;③ SQL Selection&lt;/b&gt;&lt;br&gt;&lt;i&gt;默认直通&lt;/i&gt;&lt;br&gt;&lt;font color=&quot;#666&quot;&gt;可选 Self-Consistency&lt;br&gt;Selection Agent&lt;/font&gt;">
+          <mxGeometry height="120" width="165" x="388" y="40" as="geometry" />
+        </mxCell>
+        <mxCell id="fixer" parent="L4" vertex="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#c5cae9;strokeColor=#4527a0;fontSize=9;" value="&lt;b&gt;Query Fixer&lt;/b&gt;&lt;br&gt;&lt;font color=&quot;#666&quot;&gt;执行失败→修复&lt;/font&gt;">
+          <mxGeometry height="120" width="150" x="580" y="40" as="geometry" />
+        </mxCell>
+        <mxCell id="e_sl_gen" parent="1" source="sl" target="gen" edge="1" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#3949ab;dashed=1;" value="精简 Schema">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e_gen_sel" parent="1" source="gen" target="sel" edge="1" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#3949ab;dashed=1;" value="候选 SQL">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e_sel_fix" parent="1" source="sel" target="fixer" edge="1" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#4527a0;dashed=1;" value="失败时">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <mxCell id="L5" parent="1" vertex="1" style="swimlane;startSize=26;fillColor=#fff3e0;strokeColor=#e65100;html=1;fontSize=12;" value="Layer 5: isolation-guard（自研 sqlglot · 安全关键 · 不可绕过）">
+          <mxGeometry height="100" width="780" x="0" y="675" as="geometry" />
+        </mxCell>
+        <mxCell id="perm" parent="L5" vertex="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffe0b2;strokeColor=#e65100;fontSize=10;" value="&lt;b&gt;① 权限解析&lt;/b&gt;&lt;br&gt;用户→组织→电站&lt;br&gt;产出 scope{org_ids, ps_ids}">
+          <mxGeometry height="52" width="190" x="40" y="38" as="geometry" />
+        </mxCell>
+        <mxCell id="inject" parent="L5" vertex="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffe0b2;strokeColor=#e65100;fontSize=10;" value="&lt;b&gt;② 隔离注入（sqlglot）&lt;/b&gt;&lt;br&gt;受控表→带过滤子查询&lt;br&gt;WHERE ps_id/org_id IN(...)">
+          <mxGeometry height="52" width="250" x="270" y="38" as="geometry" />
+        </mxCell>
+        <mxCell id="validate" parent="L5" vertex="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffe0b2;strokeColor=#e65100;fontSize=10;" value="&lt;b&gt;③ 只读校验（sqlglot）&lt;/b&gt;&lt;br&gt;禁非 SELECT&lt;br&gt;&lt;font color=&quot;#666&quot; style=&quot;font-size:9px&quot;&gt;思路借 pandas-ai&lt;/font&gt;">
+          <mxGeometry height="52" width="180" x="560" y="38" as="geometry" />
+        </mxCell>
+        <mxCell id="e_perm_inject" parent="1" source="perm" target="inject" edge="1" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#e65100;dashed=1;">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e_inject_val" parent="1" source="inject" target="validate" edge="1" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#e65100;dashed=1;">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <mxCell id="L6" parent="1" vertex="1" style="swimlane;startSize=26;fillColor=#eceff1;strokeColor=#546e7a;html=1;fontSize=12;" value="Layer 6: 连接代理层">
+          <mxGeometry height="80" width="780" x="0" y="800" as="geometry" />
+        </mxCell>
+        <mxCell id="proxysql" parent="L6" vertex="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#cfd8dc;strokeColor=#546e7a;fontSize=10;" value="&lt;b&gt;ProxySQL&lt;/b&gt;（StarRocks 连接池）&lt;br&gt;&lt;font color=&quot;#666&quot; style=&quot;font-size:9px&quot;&gt;部署于现有 EKS&lt;/font&gt;">
+          <mxGeometry height="44" width="220" x="290" y="30" as="geometry" />
+        </mxCell>
+
+        <mxCell id="L7" parent="1" vertex="1" style="swimlane;startSize=26;fillColor=#f3e5f5;strokeColor=#6a1b9a;html=1;fontSize=12;" value="Layer 7: datasource-adapter（可插拔抽象 · 只读连接）">
+          <mxGeometry height="80" width="780" x="0" y="910" as="geometry" />
+        </mxCell>
+        <mxCell id="starrocks" parent="L7" vertex="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1bee7;strokeColor=#6a1b9a;fontSize=10;" value="&lt;b&gt;StarRocks&lt;/b&gt;（51.3TB 数仓）&lt;br&gt;&lt;font color=&quot;#666&quot; style=&quot;font-size:9px&quot;&gt;当前唯一源；适配层预留 MySQL/Spark&lt;/font&gt;">
+          <mxGeometry height="44" width="260" x="270" y="30" as="geometry" />
+        </mxCell>
+
+        <mxCell id="mgmt" parent="1" vertex="1" style="swimlane;startSize=26;fillColor=#232f3e;strokeColor=#232f3e;html=1;fontSize=12;fontColor=#ffffff;" value="托管能力 / 组件">
+          <mxGeometry height="810" width="270" x="-400" y="185" as="geometry" />
+        </mxCell>
+        <mxCell id="memory" parent="mgmt" vertex="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff59d;strokeColor=#f57f17;fontSize=10;strokeWidth=2;" value="&lt;b&gt;AgentCore Memory&lt;/b&gt;&lt;br&gt;会话记忆（多轮）&lt;br&gt;&lt;b style=&quot;color:#f57f17&quot;&gt;★ 新增&lt;/b&gt;">
+          <mxGeometry height="70" width="230" x="20" y="40" as="geometry" />
+        </mxCell>
+        <mxCell id="bedrock" parent="mgmt" vertex="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d1f2eb;strokeColor=#01a88d;fontSize=10;" value="&lt;b&gt;Amazon Bedrock&lt;/b&gt;&lt;br&gt;Claude Sonnet/Haiku/Opus&lt;br&gt;+ Cohere Embed">
+          <mxGeometry height="70" width="230" x="20" y="145" as="geometry" />
+        </mxCell>
+        <mxCell id="opensearch" parent="mgmt" vertex="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e8ddff;strokeColor=#8c4fff;fontSize=10;" value="&lt;b&gt;OpenSearch Serverless&lt;/b&gt;&lt;br&gt;向量存储（语义缓存）&lt;br&gt;&lt;font color=&quot;#666&quot; style=&quot;font-size:9px&quot;&gt;VectorStore 当前实现，可替换&lt;/font&gt;">
+          <mxGeometry height="70" width="230" x="20" y="250" as="geometry" />
+        </mxCell>
+        <mxCell id="kb" parent="mgmt" vertex="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d1f2eb;strokeColor=#01a88d;fontSize=10;" value="&lt;b&gt;Bedrock Knowledge Bases&lt;/b&gt;&lt;br&gt;Schema RAG（可选）">
+          <mxGeometry height="60" width="230" x="20" y="355" as="geometry" />
+        </mxCell>
+        <mxCell id="dynamodb" parent="mgmt" vertex="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f6d1f9;strokeColor=#c925d1;fontSize=10;" value="&lt;b&gt;DynamoDB&lt;/b&gt;&lt;br&gt;元数据 / 实体字典">
+          <mxGeometry height="60" width="230" x="20" y="450" as="geometry" />
+        </mxCell>
+        <mxCell id="eks" parent="mgmt" vertex="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffe0cc;strokeColor=#ed7100;fontSize=10;" value="&lt;b&gt;EKS&lt;/b&gt;&lt;br&gt;query-engine + ProxySQL 运行载体">
+          <mxGeometry height="60" width="230" x="20" y="545" as="geometry" />
+        </mxCell>
+        <mxCell id="lambda" parent="mgmt" vertex="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffe0cc;strokeColor=#ed7100;fontSize=10;" value="&lt;b&gt;Lambda&lt;/b&gt;&lt;br&gt;薄网关逻辑（限流/路由/整形）">
+          <mxGeometry height="60" width="230" x="20" y="640" as="geometry" />
+        </mxCell>
+        <mxCell id="mgmt_note" parent="mgmt" vertex="1" style="text;html=1;align=left;fontSize=9;fontColor=#ffffff;verticalAlign=top;" value="注：智能问数为独立系统（EKS）；&lt;br&gt;AgentCore Memory 作为&quot;能力组件&quot;经&lt;br&gt;SDK 调用，非托管运行时。">
+          <mxGeometry height="60" width="240" x="15" y="720" as="geometry" />
+        </mxCell>
+
+        <mxCell id="oauth" parent="1" vertex="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff9c4;strokeColor=#f9a825;fontSize=11;" value="&lt;b&gt;阳光云 OAuth 2.0&lt;/b&gt;&lt;br&gt;身份 &amp; 权限">
+          <mxGeometry height="55" width="180" x="840" y="200" as="geometry" />
+        </mxCell>
+
+        <mxCell id="legacy_group" parent="1" vertex="1" style="swimlane;startSize=24;fillColor=#fce4ec;strokeColor=#c62828;html=1;fontSize=12;" value="legacy-router（Layer 2 旁路分支）">
+          <mxGeometry height="90" width="210" x="840" y="310" as="geometry" />
+        </mxCell>
+        <mxCell id="legacy_match" parent="legacy_group" vertex="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffcdd2;strokeColor=#c62828;" value="规则匹配 →&lt;br&gt;服务调用">
+          <mxGeometry height="42" width="170" x="20" y="34" as="geometry" />
+        </mxCell>
+        <mxCell id="legacy_svc" parent="1" vertex="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#efebe9;strokeColor=#4e342e;" value="Legacy 外部服务">
+          <mxGeometry height="50" width="180" x="855" y="440" as="geometry" />
+        </mxCell>
+
+        <mxCell id="note_reuse" parent="1" vertex="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f1f8e9;strokeColor=#7cb342;fontSize=10;align=left;verticalAlign=top;" value="&lt;b&gt;复用来源&lt;/b&gt;&lt;br&gt;• 术语库 / SQL 示例 / 分阶段 Pipeline ← 借鉴 SQLBot&lt;br&gt;• Layer 5 隔离：选&lt;b&gt;自研 sqlglot&lt;/b&gt;（未采用 WrenAI 的 MDL 方案）&lt;br&gt;• 只读校验思路 ← pandas-ai is_sql_query_safe&lt;br&gt;• 认证骨架 ← 复用 data-agent（换阳光云 OAuth）">
+          <mxGeometry height="90" width="470" x="0" y="1015" as="geometry" />
+        </mxCell>
+        <mxCell id="note_abstract" parent="1" vertex="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e0f7fa;strokeColor=#00838f;fontSize=10;align=left;verticalAlign=top;" value="&lt;b&gt;可替换抽象接口&lt;/b&gt;&lt;br&gt;• VectorStore（当前 OpenSearch）&lt;br&gt;• Embedder（当前 Cohere/Bedrock）&lt;br&gt;• DatasourceAdapter（当前 StarRocks）">
+          <mxGeometry height="90" width="300" x="490" y="1015" as="geometry" />
+        </mxCell>
+
+        <mxCell id="e_mobile" parent="1" source="mobile" target="rest_api" edge="1" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#0288d1;">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e_web" parent="1" source="web" target="rest_api" edge="1" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#0288d1;">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e_rest_auth" parent="1" source="rest_api" target="auth_verify" edge="1" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#388e3c;dashed=1;">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e_auth_router" parent="1" source="auth_verify" target="router" edge="1" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#388e3c;dashed=1;">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e_auth_oauth" parent="1" source="auth_verify" target="oauth" edge="1" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;dashed=1;strokeColor=#f9a825;" value="验证 Token">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e_router_legacy" parent="1" source="router" target="legacy_match" edge="1" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#c62828;" value="Legacy 匹配">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e_legacy_svc" parent="1" source="legacy_match" target="legacy_svc" edge="1" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;dashed=1;strokeColor=#c62828;" value="HTTP 调用">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e_router_ctx" parent="1" source="router" target="ctx_rewrite" edge="1" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#388e3c;" value="查询请求">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e_ctx_mem" parent="1" source="ctx_rewrite" target="memory" edge="1" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;dashed=1;strokeColor=#f57f17;startArrow=classic;startFill=1;" value="取/写 会话">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e_ctx_term" parent="1" source="ctx_rewrite" target="term_norm" edge="1" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#1565c0;" value="独立问题">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e_term_dyn" parent="1" source="term_norm" target="dynamodb" edge="1" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;dashed=1;strokeColor=#1565c0;" value="字典查找">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e_term_cache" parent="1" source="term_norm" target="sem_cache" edge="1" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#1565c0;">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e_cache_os" parent="1" source="sem_cache" target="opensearch" edge="1" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;dashed=1;strokeColor=#8c4fff;" value="向量检索">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e_cache_l4" parent="1" source="sem_cache" target="L4" edge="1" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#1565c0;dashed=1;" value="未命中">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e_cache_l5" parent="1" source="sem_cache" target="L5" edge="1" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#1565c0;" value="命中（隔离前 SQL）">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="800" y="365" />
+              <mxPoint x="800" y="725" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e_sl_kb" parent="1" source="sl" target="kb" edge="1" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;dashed=1;strokeColor=#3949ab;" value="Schema RAG">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e_gen_bedrock" parent="1" source="gen" target="bedrock" edge="1" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;dashed=1;strokeColor=#3949ab;" value="LLM 调用">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e_l4_l5" parent="1" source="L4" target="L5" edge="1" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#4527a0;" value="未校验 SQL">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e_perm_oauth" parent="1" source="perm" target="oauth" edge="1" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;dashed=1;strokeColor=#f9a825;" value="权限查询">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="960" y="729" />
+              <mxPoint x="960" y="255" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e_l5_l6" parent="1" source="L5" target="L6" edge="1" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#e65100;" value="校验通过的 SQL">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e_l6_l7" parent="1" source="L6" target="L7" edge="1" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#546e7a;" value="连接复用">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>
