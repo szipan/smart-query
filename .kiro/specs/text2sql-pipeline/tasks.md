@@ -16,45 +16,45 @@
 
 ## Tasks
 
-- [ ] 1. 工程骨架与常量
+- [x] 1. 工程骨架与常量
   - 建立包结构（`text2sql_pipeline/`：`models.py` / `deps.py` / `registry.py` / `orchestrator.py` / `stages/` / `errors.py` / `config.py` / `observer.py`）
   - 定义 dialect 常量/配置 `DIALECT = "starrocks"`
   - 建立 pytest 骨架与 `conftest.py`（提供各抽象的 mock fixture）
   - _Requirements: 12.2_
 
-- [ ] 2. 异常层次
+- [x] 2. 异常层次
   - 实现 `StrategyResolutionError`、`UnknownStrategyError`、`DuplicateStrategyError`、`StagePreconditionError`、`ConfigurationError`
   - 单测：各异常语义与信息字段（缺失阶段/字段/策略名）
   - _Requirements: 1.4, 1.5, 5.5, 9.3, 9.4_
 
-- [ ] 3. 数据模型
-- [ ] 3.1 输入模型
+- [x] 3. 数据模型
+- [x] 3.1 输入模型
   - 实现 `ResolvedEntity`、`ResolvedTerm`、`PipelineInput`（standalone_question / resolved_entities / resolved_terms / datasource_id / model_id / locale）
   - **断言 `PipelineInput` 不含 org_ids/ps_ids**（层边界）
   - 单测：input 构造与不可变性
   - _Requirements: 7.5, 7.7_
-- [ ] 3.2 流转与产出模型
+- [x] 3.2 流转与产出模型
   - 实现 `RetrievedContext`、`SqlCandidate`、`StageTrace`、`PipelineContext`（追加式写入字段）、`PipelineStatus`、`PipelineResult`
   - 单测：字段默认值、追加式语义
   - _Requirements: 10.1, 11.1_
-- [ ] 3.3 配置模型
+- [x] 3.3 配置模型
   - 实现 `StageConfig`、`PipelineConfig`（四阶段默认策略：rag / single_llm / passthrough / bounded_retry(max_attempts)）
   - 单测：默认值正确
   - _Requirements: 1.6, 1.7, 2.3, 4.1, 5.1_
 
-- [ ] 4. 能力抽象接口（Protocol，复用系统既有抽象）
+- [x] 4. 能力抽象接口（Protocol，复用系统既有抽象）
   - 定义 `Embedder`、`VectorStore`、`LlmClient`、`DatasourceAdapter`（dialect / dry_run / get_schema_snippet）、`SemanticLayerStore`、`IsolationValidator`（validate_for_probe）
   - 提供本期最小实现/桩：`DatasourceAdapter.dialect="starrocks"`；`dry_run` 本期不使用（保留接口，标注延后）
   - 单测：接口契约（isinstance / mock 可替换）
   - _Requirements: 12.1, 12.2, 12.3, 12.4, 12.5, 12.6_
 
-- [ ] 5. PipelineStage 协议 + StrategyRegistry
+- [x] 5. PipelineStage 协议 + StrategyRegistry
   - 定义 `PipelineStage` 协议（stage_type / strategy_name / run）与 `StageDependencies`
   - 实现 `StrategyRegistry`（register / create / available）与 `@register` 装饰器；重复注册抛 `DuplicateStrategyError`、未知键抛 `UnknownStrategyError`
   - 单测：注册/查找/列举；重复注册保留首个；未知策略报错；空 stage_type 返回空集合
   - _Requirements: 9.1, 9.2, 9.3, 9.4, 9.5, 9.6, 2.1_
 
-- [ ] 6. 编排器 `PipelineOrchestrator`
+- [x] 6. 编排器 `PipelineOrchestrator`
   - 按 `context_acquisition → sql_generation → sql_selection → query_fixer` 固定顺序解析并驱动；仅前一阶段成功才启动下一阶段
   - 前置字段缺失抛 `StagePreconditionError`（含阶段名+字段名）；启动期策略解析失败抛 `StrategyResolutionError`
   - 每阶段产出 `StageTrace`（ok/error/毫秒时间戳）；阶段异常记录 ok=False 并终止后续
@@ -62,25 +62,25 @@
   - 单测：顺序、前置校验、trace、四种状态映射、异常终止
   - _Requirements: 1.1, 1.2, 1.3, 1.4, 1.5, 10.2, 10.3, 10.4, 10.5, 11.1, 11.2, 11.3, 11.4, 11.5, 11.6, 11.7_
 
-- [ ] 7. 默认策略实现（本期主链路）
-- [ ] 7.1 上下文获取 `rag`（参考 SQLBot embedding/召回思路，重写）
+- [x] 7. 默认策略实现（本期主链路）
+- [x] 7.1 上下文获取 `rag`（参考 SQLBot embedding/召回思路，重写）
   - 先读 `SQLBot/backend/apps/datasource/embedding/*` 与 `data_training/`，借鉴召回思路；clean-room 重写
   - 问题（+已解析实体）向量化 → VectorStore 检索 schema 片段与 few-shot 示例 → 写入 `retrieved_context`，记录 strategy_name
   - 检索失败不写部分结果（原子）
   - 单测（mock embedder/vector_store）：命中组装、strategy_name、失败原子性
   - _Requirements: 2.1, 2.4, 2.7, 2.8, 2.9_
-- [ ] 7.2 SQL 生成 `single_llm`（参考 SQLBot generate_sql prompt 思路，重写）
+- [x] 7.2 SQL 生成 `single_llm`（参考 SQLBot generate_sql prompt 思路，重写）
   - 先读 `SQLBot/backend/apps/template/generate_sql/` 与 `chat/task/llm.py` 的 prompt 组织，借鉴后重写
   - 组装 prompt（schema/术语/示例/方言），**system 明确禁止输出任何权限过滤条件**；模型选择：请求级 `model_id` > 策略默认（Claude Sonnet）
   - 追加恰好 1 个 `SqlCandidate`（sql/generator_name/model_id 均非空）；抽取 SQL（去 markdown 围栏）
   - 模型不可用 → 拒绝不追加候选；调用失败/60s 超时 → 失败不追加部分候选
   - 单测（mock llm）：候选字段完整、模型优先级、产出无权限过滤、失败路径
   - _Requirements: 4.1, 4.2, 4.3, 4.4, 4.6, 4.7, 4.8, 7.1, 7.2_
-- [ ] 7.3 SQL 选择 `passthrough`
+- [x] 7.3 SQL 选择 `passthrough`
   - 取候选生成顺序的第一个写入 `selected_sql`；候选为空抛 `StagePreconditionError`
   - 单测：直通选择、空候选报错
   - _Requirements: 5.1, 5.2, 5.7_
-- [ ] 7.4 Query Fixer `bounded_retry`（本期静态校验版，无 dry_run）
+- [x] 7.4 Query Fixer `bounded_retry`（本期静态校验版，无 dry_run）
   - 先读 `SQLBot/backend/apps/db/db.py::check_sql_read` 的只读思路（仅思路，不抄）
   - **本期路径**：调用 `IsolationValidator.validate_for_probe` 做静态校验（L5 隔离+只读，**不 dry_run**）；通过 → `final_sql`；抛异常（静态失败）→ 回灌 LLM 修复并重试，`fix_attempts` 递增，上限 `max_attempts`
   - 未注入 validator → 跳过校验，`selected_sql` 直接作 `final_sql`（Req 6.4）
@@ -89,22 +89,22 @@
   - 单测（mock validator）：静态通过/失败重试/用尽/无 validator 跳过；`fix_attempts ≤ max_attempts`
   - _Requirements: 6.1, 6.2, 6.4, 6.5, 6.6, 6.7_
 
-- [ ] 8. 组装入口与策略注册触发
+- [x] 8. 组装入口与策略注册触发
   - 实现 `build_orchestrator(config, deps, observer)`：导入触发默认策略注册，解析并返回编排器
   - 单测：默认配置端到端（全 mock 依赖）跑通 rag→single_llm→passthrough→bounded_retry
   - _Requirements: 1.1, 1.6, 1.7_
 
-- [ ] 9. 层边界保证与校验
+- [x] 9. 层边界保证与校验
   - 实现"层边界自检"：产出 SQL 不含 `org_id/ps_id` 过滤；本层不做隔离注入/只读强制/权限解析；检测越界 → 返回"层边界违规"错误不产出 SQL
   - 单测：产出 SQL 无权限过滤子句；input 无 scope；越界检测
   - _Requirements: 7.1, 7.2, 7.3, 7.4, 7.6, 7.8, 7.9_
 
-- [ ] 10. 阶段隔离与共享上下文
+- [x] 10. 阶段隔离与共享上下文
   - 保证各阶段只写自己声明的产出字段、`PipelineContext.input` 执行后深度相等、不 import 其他阶段内部模块、仅追加式写入
   - 单测：input 不可变（深度相等）；非负责字段不变；mock 全部依赖后各阶段独立可测
   - _Requirements: 8.1, 8.2, 8.3, 8.4, 8.5, 8.6_
 
-- [ ] 11. 可观测性
+- [x] 11. 可观测性
   - StageTrace 毫秒时间戳、ok/error；失败 error 不含敏感值；PipelineResult 汇总 traces + stage_strategies + request_id
   - 日志不记录用户查询数据字段值/结果集内容
   - 单测：trace 完整性、脱敏、request_id 关联
@@ -121,7 +121,7 @@
   - 框架已支持注册，此处补实现；单测覆盖候选数量与选择算法
   - _Requirements: 4.5, 5.3, 5.4, 5.6_
 
-- [ ] 14. 属性测试（覆盖 8 条正确性属性）
+- [x] 14. 属性测试（覆盖 8 条正确性属性）
   - 用 hypothesis 覆盖 Property 1~8：边界不越权、输入不可变、阶段隔离写入、顺序不变式、修复有界、探测不绕过隔离（本期以 validate_for_probe 为准）、策略可替换等价、结果状态映射
   - _Requirements: 7.1, 7.2, 4.6, 8.1, 8.2, 8.3, 8.4, 1.2, 1.3, 1.5, 6.1, 6.2, 6.3, 6.4, 2.5, 2.6, 9.2, 11.1, 11.2, 11.3, 11.4, 11.7_
 
