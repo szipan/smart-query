@@ -50,10 +50,19 @@ def _current_window() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
 
+def _window_end(now: datetime | None = None) -> datetime:
+    now = now or datetime.now(timezone.utc)
+    return now.replace(hour=23, minute=59, second=59, microsecond=0)
+
+
 def _seconds_to_next_window() -> int:
     now = datetime.now(timezone.utc)
-    end = now.replace(hour=23, minute=59, second=59, microsecond=0)
-    return max(1, int((end - now).total_seconds()))
+    return max(1, int((_window_end(now) - now).total_seconds()))
+
+
+def _window_end_epoch() -> int:
+    """当前窗口结束的 Unix 时间戳（供 DynamoDB TTL 用；内存实现忽略）。"""
+    return int(_window_end().timestamp())
 
 
 class RateLimiter:
@@ -69,7 +78,7 @@ class RateLimiter:
         window = _current_window()
         pk = f"USER#{user_id}#{window}"
         limit = self._resolve_limit(user_id)
-        ttl = 0  # 内存实现忽略；DynamoDB 实现设窗口末 epoch
+        ttl = _window_end_epoch()  # DynamoDB 用于 TTL 过期；内存实现忽略
         allowed, count = self._store.incr_if_below(pk, limit, ttl)
         if not allowed:
             return RateLimitDecision(allowed=False, remaining=0,

@@ -21,6 +21,10 @@ dist/
 .coverage
 htmlcov/
 
+# 环境变量（可能含敏感信息）——只提交 .env.example
+.env
+.env.local
+
 # IDE
 .idea/
 .vscode/
