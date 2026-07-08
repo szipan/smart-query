@@ -15,13 +15,13 @@
 
 ## Tasks
 
-- [ ] 1. 工程骨架与配置
+- [x] 1. 工程骨架与配置
   - 建立包结构（`api_gateway/`：`handler.py` / `identity.py` / `ratelimit.py` / `router.py` / `clients/`（engine/legacy）/ `envelope.py` / `errors.py` / `config.py` / `auth/`（authorizer））
   - 配置项：边缘限流值、DynamoDB 表名、窗口策略、下游 URL、`question` 长度上限（2000）
   - pytest 骨架 + conftest（DynamoDB moto、mock 下游 fixture）
   - _Requirements: 10.1, 10.2_
 
-- [ ] 2. 统一信封与错误模型
+- [x] 2. 统一信封与错误模型
   - 实现 `QueryRequest`（question/session_id/stream/client_meta，校验 question 非空且 ≤2000）、`QueryResponse`（request_id/status/data/source）、`ErrorEnvelope`（code/message/request_id/retry_after）
   - HTTP 状态码映射：UNAUTHORIZED→401、BAD_REQUEST→400、RATE_LIMITED→429、DOWNSTREAM_ERROR→502/503/504
   - message 排除内部细节（堆栈/SQL/身份内部）
@@ -29,44 +29,44 @@
   - 单测：信封字段、状态码映射、参数校验（空/超长→BAD_REQUEST）、脱敏
   - _Requirements: 7.1, 7.2, 7.3, 7.4, 7.5, 7.6, 9.7_
 
-- [ ] 3. 身份构造共享库（传输无关）
+- [x] 3. 身份构造共享库（传输无关）
   - 实现 `build_identity(claims, request_id) -> IdentityContext`（user_id/tenant_id/scopes/raw_claims/request_id），**不绑定 API Gateway event 结构**
   - 提供"等价 token 校验"纯函数（供未来流式入口复用），当前供 Authorizer/Lambda 共用
   - **不从 raw_claims 解析 org_ids/ps_ids**（数据范围属 L5）
   - 单测：identity 构造；user_id 非空校验；不产出范围字段
   - _Requirements: 6.1, 6.2, 6.4, 6.5, 9.4, 9.6_
 
-- [ ] 4. 认证（选项 A · Lambda Authorizer）
+- [x] 4. 认证（选项 A · Lambda Authorizer）
   - 实现 `REQUEST` 型 Lambda Authorizer：按阳光云 OAuth 2.0 校验 JWT；成功 → 注入 claims 到 `requestContext.authorizer`；失败/缺失/过期/签名无效 → 拒绝（401 `UNAUTHORIZED`）
   - 复用 T3 的等价校验纯函数，保证与未来流式路径同源
   - 保证"到达下游前有且仅有一次成功认证"；仅认证不做数据授权
   - 单测（mock JWT/JWKS）：有效放行、各类无效→401、claims 注入
   - _Requirements: 2.1, 2.2, 2.4, 2.5, 2.6_
 
-- [ ] 5. 单用户业务限流共享库（DynamoDB 原子计数）
+- [x] 5. 单用户业务限流共享库（DynamoDB 原子计数）
   - 实现 `RateLimiter.check_and_increment(user_id, request_id) -> RateLimitDecision`，**独立于入口形态**（共享库）
   - DynamoDB `pk="USER#<user_id>#<window>"`，`UpdateItem` + `ADD count :one` + 条件 `count < :limit` 原子自增；超限→allowed=False + retry_after；配 TTL 自动回收；`RateLimitRecord` 模型
   - 单测（moto）：正常自增、超限拒绝、并发原子性不丢增、TTL 字段、429 + Retry-After
   - _Requirements: 4.1, 4.2, 4.3, 4.4, 4.6, 4.7_
 
-- [ ] 6. Legacy/Query 路由决策
-- [ ] 6.1 可序列化路由规则与注册表
+- [x] 6. Legacy/Query 路由决策
+- [x] 6.1 可序列化路由规则与注册表
   - 实现 `RoutingRule`（rule_id/matcher/target/priority/description）与 `RuleRegistry`（按 priority 遍历、首个命中即返回、全不命中→QUERY）
   - **定义可序列化 matcher 规格**（type: keyword/regex/prefix + 参数），加载器由配置（文件/DynamoDB）构造谓词，支持热更新不改代码（补齐 design §4.5 与"配置驱动"之间的缺口）
   - 单测：优先级顺序、首个命中、fail-to-query 默认、配置加载
   - _Requirements: 5.1, 5.2, 5.3, 5.4, 5.8_
-- [ ] 6.2 路由执行委派
+- [x] 6.2 路由执行委派
   - QUERY → `EngineClient` 调 L3；LEGACY → `LegacyClient` 委托 legacy-router；本层只决策不执行
   - 单测：命中 LEGACY 带 rule_id 委托、未命中走 QUERY
   - _Requirements: 5.5, 5.6, 5.7_
 
-- [ ] 7. 出站客户端（身份透传）
+- [x] 7. 出站客户端（身份透传）
   - `EngineClient.invoke`：HTTPS 调 L3；透传 `X-Identity-User-Id`/`X-Request-Id` 头 + body `identity.raw_claims`；5xx/超时/连接失败 → DownstreamError
   - `LegacyClient.invoke`：命中 Legacy 委托 legacy-router，透传身份
   - 单测（mock http）：身份透传字段、下游错误→DOWNSTREAM_ERROR
   - _Requirements: 6.3, 6.5, 7.7_
 
-- [ ] 8. 薄 Lambda 编排 Handler（固定顺序 + 零智能 + 响应可分块抽象）
+- [x] 8. 薄 Lambda 编排 Handler（固定顺序 + 零智能 + 响应可分块抽象）
   - 固定顺序：解析请求+构造身份 → **单用户限流（早于路由与下游）** → Legacy/Query 路由决策 → 请求整形+身份透传 → 调下游 → 整形回包
   - **薄层零智能**：不生成 SQL、不查库、不调 LLM、不解析范围
   - **stream=true → 400 BAD_REQUEST（本期不支持流式）**
@@ -75,28 +75,28 @@
   - 单测：编排顺序、限流早于路由、零智能断言、stream=true→400、错误信封
   - _Requirements: 3.1, 3.2, 3.3, 3.4, 3.5, 3.6, 4.5, 9.1, 9.2, 9.3, 9.6, 11.1, 11.2, 11.3, 11.4, 11.5_
 
-- [ ] 9. request_id 全链路贯通
+- [x] 9. request_id 全链路贯通
   - 入口生成或采用客户端 `X-Request-Id`；透传每次下游调用；写入每条结构化日志；响应 request_id 恒等于入口 request_id
   - 单测：生成/透传/响应一致性
   - _Requirements: 8.1, 8.2, 8.3, 8.4_
 
-- [ ] 10. 可观测性
+- [x] 10. 可观测性
   - 每编排步骤（认证结果/限流决策/路由决策/下游耗时/状态码）打结构化日志，含 request_id + 脱敏 user_id；发出 429 率、下游延迟、路由分布（query vs legacy）指标
   - 单测：日志字段/脱敏、指标发出
   - _Requirements: 12.1, 12.2, 12.3_
 
-- [ ] 11. API Gateway / WAF / Lambda 配置（IaC 草图）
+- [x] 11. API Gateway / WAF / Lambda 配置（IaC 草图）
   - `POST /v1/query`：`AWS_PROXY` 集成、REQUEST 型 Authorizer（选项 A）、方法级边缘限流（稳态+突发）、WAF WebACL（IP 速率 + SQLi/XSS 托管规则）、集成超时 29s
   - 呈现给 iOS/Android/Web/外部应用完全相同的契约；运行于 API Gateway + Lambda（**不使用 ECS Fargate**）
   - 校验：cfn-lint（若用 CFN）；文档标注"流式 Function URL 变体本期不部署"
   - _Requirements: 1.1, 1.2, 1.3, 1.4, 1.5, 1.6, 2.3, 10.3, 10.4, 9.1_
 
-- [ ] 12. 层边界自检
+- [x] 12. 层边界自检
   - 断言 L2 不做术语归一化/语义缓存（L3）、不生成 SQL（L4）、不隔离/不解析范围（L5）、不执行查询（L6/7）；输出恒为下游结果信封或错误信封
   - 单测：越界检测；输出二态
   - _Requirements: 11.1, 11.2, 11.3, 11.4, 11.5_
 
-- [ ] 13. 属性测试（覆盖 9 条正确性属性）
+- [x] 13. 属性测试（覆盖 9 条正确性属性）
   - hypothesis 覆盖 Property 1~9：认证前置、薄层零智能、身份必达、不解析范围、单用户限流生效、路由确定性、限流早于路由与下游、错误信封统一、request_id 贯通
   - 例：任意 question → route ∈ {QUERY,LEGACY} 且未命中必 QUERY；任意窗口内第 >limit 次必 429 且无下游调用；任意成功请求响应 request_id == 入口 request_id
   - _Requirements: 2.1, 2.5, 3.2, 3.3, 3.4, 3.5, 4.1, 4.5, 4.7, 5.1, 5.2, 5.3, 5.4, 6.1, 6.2, 7.3, 8.1, 8.4_

@@ -1,0 +1,39 @@
+# Layer 2 api-gateway 基础设施草图（design.md §9.5；Requirements 1/2/10）
+# 本期只部署变体 A（一次性 JSON）。流式 Function URL 变体本期不部署。
+# 说明：这是示意草图，非交付 IaC；真实部署以 CDK/CFN/Terraform 落地。
+
+api:
+  type: REST API                       # Regional 或 Edge-optimized
+  paths:
+    /v1/query:
+      post:
+        integration:
+          type: AWS_PROXY              # Lambda Proxy：原始请求整体交给薄 Lambda
+          uri: arn:aws:apigateway:...:lambda:.../${ThinLambdaArn}/invocations
+          timeoutInMillis: 29000       # 硬上限 29s（一次性 JSON 路径）
+        authorizer: SunCloudOAuthAuthorizer   # 选项 A：Lambda Authorizer 终结认证
+
+authorizer:
+  SunCloudOAuthAuthorizer:
+    type: REQUEST                      # REQUEST 型 Lambda Authorizer
+    identitySource: method.request.header.Authorization
+    authorizerResultTtlInSeconds: 300  # 缓存校验结果，降本
+    # 校验阳光云 OAuth JWT；通过后把 claims 注入 requestContext.authorizer
+
+edge_throttle:                         # 阶段/方法级边缘限流（粗粒度）
+  rateLimit: 1000                      # 稳态 req/s
+  burstLimit: 2000                     # 突发桶
+
+waf:
+  webACL: arn:aws:wafv2:...:webacl/smart-query-edge   # IP 速率 + 托管 SQLi/XSS 规则组
+
+dynamodb:
+  table: api_gateway_rate_limit        # 单用户业务限流计数
+  pk: "USER#<user_id>#<window>"        # 原子条件自增 + TTL 自动回收
+
+runtime:
+  compute: [API Gateway, Lambda]       # 无服务器；不使用 ECS Fargate
+  downstream: EKS query-engine (Layer 3)
+
+# 流式（变体 B）：POST /v1/query/stream → Lambda Function URL (RESPONSE_STREAM)
+#   —— 本期不部署；未来启用时复用共享的认证/限流/身份构造库（design §12.3）。
