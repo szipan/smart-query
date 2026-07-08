@@ -7,7 +7,7 @@ import pytest
 from text2sql_pipeline.deps import StageDependencies
 from text2sql_pipeline.models import PipelineInput
 
-from fakes import FakeDatasource, FakeEmbedder, FakeLlm, FakeVectorStore
+from l4_fakes import FakeDatasource, FakeEmbedder, FakeLlm, FakeVectorStore
 
 
 @pytest.fixture

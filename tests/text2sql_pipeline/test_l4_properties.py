@@ -8,7 +8,7 @@ from hypothesis import strategies as st
 from text2sql_pipeline.deps import StageDependencies
 from text2sql_pipeline.models import PipelineConfig, PipelineInput, PipelineStatus
 from text2sql_pipeline.orchestrator import build_orchestrator
-from fakes import FakeEmbedder, FakeLlm, FakeVectorStore, FakeDatasource
+from l4_fakes import FakeEmbedder, FakeLlm, FakeVectorStore, FakeDatasource
 
 
 def _deps(sql="SELECT ps_id FROM fact_power_station_kpi_month"):

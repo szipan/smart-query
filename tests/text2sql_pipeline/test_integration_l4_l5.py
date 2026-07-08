@@ -10,7 +10,7 @@ from isolation_guard.sungrow_policy import sungrow_table_policy
 from text2sql_pipeline.deps import StageDependencies
 from text2sql_pipeline.models import PipelineConfig, PipelineInput, PipelineStatus
 from text2sql_pipeline.orchestrator import build_orchestrator
-from fakes import FakeEmbedder, FakeLlm, FakeVectorStore, FakeDatasource
+from l4_fakes import FakeEmbedder, FakeLlm, FakeVectorStore, FakeDatasource
 
 
 def _deps_with_real_l5(sql: str) -> StageDependencies:
