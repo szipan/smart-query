@@ -43,6 +43,43 @@ def test_rewrite_memory_fail_degrades() -> None:
     assert ctx.warnings
 
 
+def test_rewrite_accepts_answer_summary_key() -> None:
+    # 历史 turn 用 answer_summary（AgentCore/InMemory 的字段），应被正确拼进历史
+    llm = FakeLlm(out="上个月各电站发电量")
+    turns = [{"question": "本月发电量", "answer_summary": "SELECT ..."}]
+    ctx = _ctx(q="那上个月呢")
+    ContextRewriter(FakeMemory(turns=turns), llm).run(ctx)
+    assert "SELECT ..." in llm.calls[0]["prompt"]  # answer_summary 进了 prompt
+    assert ctx.standalone_question == "上个月各电站发电量"
+
+
+def test_rewrite_strips_wrapping_quotes() -> None:
+    llm = FakeLlm(out='"上个月各电站发电量"')
+    ctx = _ctx(q="那上个月呢")
+    ContextRewriter(FakeMemory(turns=[{"question": "本月发电量", "answer": "x"}]), llm).run(ctx)
+    assert ctx.standalone_question == "上个月各电站发电量"
+
+
+def test_rewrite_oversized_falls_back_to_raw() -> None:
+    llm = FakeLlm(out="x" * 5000)  # 超长 → 回退原问题
+    ctx = _ctx(q="那上个月呢")
+    ContextRewriter(FakeMemory(turns=[{"question": "q", "answer": "a"}]), llm).run(ctx)
+    assert ctx.standalone_question == "那上个月呢"
+    assert any("超长" in w for w in ctx.warnings)
+
+
+class _RaisingLlm:
+    def complete(self, *, system, prompt, max_tokens=1024, temperature=0.0):
+        raise RuntimeError("bedrock down")
+
+
+def test_rewrite_llm_failure_degrades_to_raw() -> None:
+    ctx = _ctx(q="那上个月呢")
+    ContextRewriter(FakeMemory(turns=[{"question": "q", "answer": "a"}]), _RaisingLlm()).run(ctx)
+    assert ctx.standalone_question == "那上个月呢"
+    assert any("改写 LLM 调用失败" in w for w in ctx.warnings)
+
+
 # ---- TermNormalizer ----
 def test_hard_resolver_deterministic() -> None:
     d = FakeEntityDictionary(hits=[{"surface": "1号电站", "canonical": "PS-1", "entity_type": "power_station", "entity_id": "1001"}])

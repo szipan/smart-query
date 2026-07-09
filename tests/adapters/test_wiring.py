@@ -86,6 +86,7 @@ def _settings() -> AwsSettings:
     return AwsSettings(
         region="us-west-2", llm_model_id="m", embed_model_id="e", embed_dimensions=8,
         opensearch_endpoint="x", opensearch_index="i", ddb_table="t", user_rate_limit=100,
+        memory_id="",
     )
 
 
@@ -126,7 +127,8 @@ def test_full_chain_rejects_write_sql() -> None:
 
 def test_rate_limit_shared_store_blocks_after_limit() -> None:
     s = AwsSettings(region="us-west-2", llm_model_id="m", embed_model_id="e", embed_dimensions=8,
-                    opensearch_endpoint="x", opensearch_index="i", ddb_table="t", user_rate_limit=1)
+                    opensearch_endpoint="x", opensearch_index="i", ddb_table="t", user_rate_limit=1,
+                    memory_id="")
     embedder = build_embedder(s, client=FakeEmbed())
     vs = build_vector_store(s, client=FakeOs())
     llm = build_llm(s, client=FakeConverse("SELECT ps_id FROM fact_power_station_kpi_month"))

@@ -13,6 +13,7 @@ from __future__ import annotations
 
 from typing import Any, Optional
 
+from adapters.agentcore_memory import AgentCoreMemory
 from adapters.bedrock import BedrockEmbedder, BedrockLlmClient
 from adapters.dynamodb import DynamoDbCounterStore
 from adapters.opensearch import OpenSearchVectorStore, make_opensearch_client
@@ -149,6 +150,15 @@ def build_counter_store(settings: AwsSettings, client: Any = None) -> DynamoDbCo
     return DynamoDbCounterStore(table_name=settings.ddb_table, client=client, region=settings.region)
 
 
+def build_memory(settings: AwsSettings, client: Any = None):
+    """有 memory_id → AgentCore Memory（多实例持久）；否则退回进程内占位并告警。"""
+    if settings.memory_id:
+        return AgentCoreMemory(memory_id=settings.memory_id, client=client, region=settings.region)
+    import warnings
+    warnings.warn("未设置 SMARTQUERY_MEMORY_ID，回退进程内 InMemoryMemory（非持久，仅本地）")
+    return InMemoryMemory()
+
+
 def build_engine(settings: AwsSettings, *, embedder=None, vector_store=None, llm=None,
                  memory=None) -> QueryOrchestrator:
     """组装 L3 QueryOrchestrator（内部含真实 L4 与 L5）。"""
@@ -164,7 +174,7 @@ def build_engine(settings: AwsSettings, *, embedder=None, vector_store=None, llm
     iso_factory = IsolationGuardFactory(policy=sungrow_table_policy())
 
     engine_deps = EngineDependencies(
-        memory=memory or InMemoryMemory(),
+        memory=memory or build_memory(settings),
         llm=llm, embedder=embedder, vector_store=vector_store,
         entity_dictionary=None,
         layer4=RealLayer4Adapter(l4_orch),

@@ -27,6 +27,7 @@ class AwsSettings:
     opensearch_index: str
     ddb_table: str
     user_rate_limit: int
+    memory_id: str
 
     @classmethod
     def from_env(cls) -> "AwsSettings":
@@ -40,4 +41,5 @@ class AwsSettings:
             opensearch_index=_env("SMARTQUERY_OPENSEARCH_INDEX", "smartquery-vectors"),
             ddb_table=_env("SMARTQUERY_DDB_TABLE", "api_gateway_rate_limit"),
             user_rate_limit=int(_env("SMARTQUERY_USER_RATE_LIMIT", "200")),
+            memory_id=_env("SMARTQUERY_MEMORY_ID", ""),
         )
