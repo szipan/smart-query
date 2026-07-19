@@ -3,6 +3,8 @@
 # （SQLBot 为 modified-GPLv3，仅作设计参考，clean-room 重写，不复制源码）
 # ============================================================
 SQLBot/
+# 参考项目克隆——仅供分析借鉴，不纳入版本库
+sample-analytics-agent-progressive-disclosure/
 
 # Python 虚拟环境与字节码
 .venv/

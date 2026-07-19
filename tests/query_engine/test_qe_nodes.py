@@ -80,6 +80,22 @@ def test_rewrite_llm_failure_degrades_to_raw() -> None:
     assert any("改写 LLM 调用失败" in w for w in ctx.warnings)
 
 
+def test_rewrite_no_memory_uses_raw() -> None:
+    # memory=None（未接 Memory 能力）→ 直接用原问题，不应尝试读历史或调 LLM
+    llm = FakeLlm(out="不应该被用到的改写")
+    ctx = _ctx(q="那上个月呢")
+    ContextRewriter(None, llm).run(ctx)
+    assert ctx.standalone_question == "那上个月呢"
+    assert not llm.calls
+
+
+def test_rewrite_history_without_llm_uses_raw() -> None:
+    # 有历史但 llm=None（未接 LLM 能力）→ 无法改写，用原问题
+    ctx = _ctx(q="那上个月呢")
+    ContextRewriter(FakeMemory(turns=[{"question": "本月发电量", "answer": "..."}]), None).run(ctx)
+    assert ctx.standalone_question == "那上个月呢"
+
+
 # ---- TermNormalizer ----
 def test_hard_resolver_deterministic() -> None:
     d = FakeEntityDictionary(hits=[{"surface": "1号电站", "canonical": "PS-1", "entity_type": "power_station", "entity_id": "1001"}])
