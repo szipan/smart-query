@@ -96,26 +96,37 @@ class OpenSearchVectorStore:
         return results
 
     # ---------- 写入 ----------
+    # AOSS VECTORSEARCH 限制：不支持自定义 _id、不支持按外部 id 删除、不支持 delete_by_query。
+    # 因此：index 用自动 _id；删除/覆盖时先按 (namespace, entry_id) search 出自动 _id，再按 _id 删。
+    # 注意：AOSS 为最终一致，刚写入的文档短时间内可能搜不到，故「写后立即删/覆盖」为尽力而为。
+    def _find_ids(self, namespace: str, entry_id: str) -> list[str]:
+        body = {
+            "size": 100,
+            "query": {"bool": {"filter": [
+                {"term": {NAMESPACE_FIELD: namespace}},
+                {"term": {ENTRY_ID_FIELD: entry_id}},
+            ]}},
+            "_source": False,
+        }
+        resp = self._client.search(index=self._index, body=body)
+        return [h["_id"] for h in resp.get("hits", {}).get("hits", [])]
+
     def upsert(self, namespace: str, entry: dict[str, Any]) -> None:
         doc = dict(entry)
         doc[NAMESPACE_FIELD] = namespace
         entry_id = doc.get(ENTRY_ID_FIELD) or uuid.uuid4().hex
         doc[ENTRY_ID_FIELD] = entry_id
-        # AOSS 自动生成 _id；逻辑 id 存于 entry_id 字段（便于 delete_by_query）
+        # 先删同 entry_id 旧文档，避免更新产生重复（受最终一致影响，尽力而为）
+        for _id in self._find_ids(namespace, entry_id):
+            try:
+                self._client.delete(index=self._index, id=_id)
+            except Exception:  # noqa: BLE001 —— 旧文档清理失败不阻断写入
+                pass
         self._client.index(index=self._index, body=doc)
 
     def delete(self, namespace: str, entry_id: str) -> None:
-        body = {
-            "query": {
-                "bool": {
-                    "filter": [
-                        {"term": {NAMESPACE_FIELD: namespace}},
-                        {"term": {ENTRY_ID_FIELD: entry_id}},
-                    ]
-                }
-            }
-        }
-        self._client.delete_by_query(index=self._index, body=body)
+        for _id in self._find_ids(namespace, entry_id):
+            self._client.delete(index=self._index, id=_id)
 
 
 def make_opensearch_client(*, endpoint: str, region: str, service: str = "aoss"):

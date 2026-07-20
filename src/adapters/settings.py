@@ -28,6 +28,11 @@ class AwsSettings:
     ddb_table: str
     user_rate_limit: int
     memory_id: str
+    # —— knowledge-admin 知识表 ——
+    glossary_table: str = "knowledge_glossary"
+    glossary_name_table: str = "knowledge_glossary_name"
+    entity_table: str = "knowledge_entity"
+    alias_table: str = "knowledge_alias_index"
 
     @classmethod
     def from_env(cls) -> "AwsSettings":
@@ -42,4 +47,8 @@ class AwsSettings:
             ddb_table=_env("SMARTQUERY_DDB_TABLE", "api_gateway_rate_limit"),
             user_rate_limit=int(_env("SMARTQUERY_USER_RATE_LIMIT", "200")),
             memory_id=_env("SMARTQUERY_MEMORY_ID", ""),
+            glossary_table=_env("SMARTQUERY_GLOSSARY_TABLE", "knowledge_glossary"),
+            glossary_name_table=_env("SMARTQUERY_GLOSSARY_NAME_TABLE", "knowledge_glossary_name"),
+            entity_table=_env("SMARTQUERY_ENTITY_TABLE", "knowledge_entity"),
+            alias_table=_env("SMARTQUERY_ALIAS_TABLE", "knowledge_alias_index"),
         )

@@ -263,6 +263,10 @@ class ContextRewriter(Protocol):
 - `HardEntityResolver`（硬 / 确定性）：关键业务实体（电站名 / 指标名）经**字典精确 / 规则匹配**映射到标准词 + 标准 id（字典可存 DynamoDB）。**确定性**：同一输入恒定得到同一映射。
 - `SoftGlossaryResolver`（软 / LLM 中介）：一般描述词经**术语库向量检索**取同义词 + 定义，供后续注入 prompt（由 Layer 4 的 LLM 对齐）。借鉴 SQLBot 术语库思路，重新实现。
 
+> **数据来源（由知识管理面 knowledge-admin 维护，见 `.kiro/specs/knowledge-admin/`）**：
+> - **硬通道**：`EntityDictionary` 的实现为 `adapters/entity_dictionary.py`（Aho-Corasick 匹配器），从 DynamoDB `knowledge_entity` 表加载**启用**实体的别名→实体映射；wiring 已将其注入（替换原 `None`）。实体条目由 knowledge-admin 后端手动维护（CRUD + 批量导入）。
+> - **软通道**：`VectorStore` 的 `glossary` 命名空间数据由 knowledge-admin 权威写入并同步（术语增改删 → 重新向量化 → upsert/删除），取代早期 `scripts/ingest_opensearch.py` 中手写的术语种子。
+
 **接口**：
 ```python
 class TermNormalizer(Protocol):

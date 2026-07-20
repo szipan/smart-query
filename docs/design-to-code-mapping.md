@@ -61,6 +61,19 @@ flowchart TD
         ST["环境配置<br/>settings.py"]
     end
 
+    ED["EntityDictionary(Aho-Corasick)<br/>entity_dictionary.py"]
+
+    subgraph KA[知识管理面  src/knowledge_admin/]
+        API2["FastAPI 路由/装配<br/>api.py/app.py"]
+        GSVC["GlossaryService/EntityService<br/>service.py"]
+        SYNC["软通道向量同步<br/>sync.py"]
+        KSTORE["DynamoDB 权威存储<br/>dynamodb_stores.py"]
+        IMP["批量导入/导出<br/>importer.py"]
+        API2 --> GSVC --> KSTORE
+        GSVC --> SYNC
+        API2 --> IMP
+    end
+
     WIRE["跨层组装 wiring.py"]
 
     H --> QO
@@ -70,8 +83,14 @@ flowchart TD
     S1 -. Embedder/VectorStore .-> BR & OS
     S2 -. LlmClient .-> BR
     SC -. Embedder/VectorStore .-> BR & OS
+    TN -. 硬通道 match .-> ED
+    ED -. 加载别名 .-> KSTORE
+    SYNC -. upsert glossary .-> OS
+    TN -. 软通道检索 .-> OS
     WIRE -. 组装 .-> L2 & L3 & L4 & L5 & ADP
 ```
+
+> 管理员经知识管理面（KA）维护软/硬通道数据：软通道术语经 `sync.py` 同步到 OpenSearch `glossary` 命名空间；硬通道实体存 DynamoDB，`entity_dictionary.py`（ED）加载供 L3 术语归一化（TN）的硬通道匹配。
 
 ---
 
@@ -144,6 +163,27 @@ flowchart TD
 | `VectorStore`（L3/L4） | `src/adapters/opensearch.py` (`OpenSearchVectorStore`) | OpenSearch Serverless k-NN，SigV4，单索引 + namespace |
 | `CounterStore`（L2） | `src/adapters/dynamodb.py` (`DynamoDbCounterStore`) | DynamoDB 原子条件自增 + TTL |
 | 环境驱动配置（模型/区域/端点单点切换） | `src/adapters/settings.py` (`AwsSettings`) | 换模型改 `SMARTQUERY_LLM_MODEL_ID` |
+| `EntityDictionary`（L3 硬通道运行时匹配） | `src/adapters/entity_dictionary.py` (`AhoCorasickEntityDictionary`) | Aho-Corasick，从 DynamoDB `knowledge_entity` 加载别名→实体；最长非重叠匹配；TTL 重建；降级为空 |
+
+## 知识管理面（knowledge-admin，`src/knowledge_admin/`）
+
+管理员维护软/硬通道知识数据的独立后端（FastAPI，前后端分离，本期仅后端）。详见 `.kiro/specs/knowledge-admin/`。
+
+| 设计模块 / 职责 | 源文件 |
+|---|---|
+| 数据模型 + 归一化（GlossaryTerm / EntityEntry / normalize） | `models.py` |
+| 错误类型（HTTP 状态映射） | `errors.py` |
+| 能力抽象 Protocol | `deps.py` |
+| 软通道向量同步（embed + upsert/delete 到 glossary 命名空间） | `sync.py` (`GlossaryIndexSync`) |
+| 软/硬通道业务服务（CRUD + 唯一性 + 软通道强一致回滚 + 搜索） | `service.py` (`GlossaryService` / `EntityService`) |
+| DynamoDB 权威存储（TransactWriteItems 保证业务键 + 别名全局唯一） | `dynamodb_stores.py` |
+| 批量导入/导出/模板（Excel + CSV，逐行报告） | `importer.py` |
+| 管理员鉴权（占位，预留 OAuth 扩展点） | `auth.py` |
+| 审计 / 可观测 | `observer.py` |
+| FastAPI 路由 + 应用装配 | `api.py` / `app.py` |
+| 建表脚本（4 张 DynamoDB 表） | `scripts/create_knowledge_tables.py` |
+
+**衔接**：软通道写入 → 同步到向量库 `glossary`（L3 `SoftGlossaryResolver` 消费）；硬通道条目存 `knowledge_entity` → `adapters/entity_dictionary.py` 加载供 L3 `HardEntityResolver` 消费。
 
 ## 跨层组装 & 运维/演示脚本
 

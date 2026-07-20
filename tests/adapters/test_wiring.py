@@ -95,7 +95,8 @@ def _gateway_with_sql(sql: str):
     embedder = build_embedder(s, client=FakeEmbed())
     vs = build_vector_store(s, client=FakeOs())
     llm = build_llm(s, client=FakeConverse(sql))
-    engine = build_engine(s, embedder=embedder, vector_store=vs, llm=llm, memory=InMemoryMemory())
+    engine = build_engine(s, embedder=embedder, vector_store=vs, llm=llm, memory=InMemoryMemory(),
+                          entity_dictionary=None)
     cs = build_counter_store(s, client=FakeDynamo())
     return build_gateway(s, engine=engine, counter_store=cs)
 
@@ -132,7 +133,8 @@ def test_rate_limit_shared_store_blocks_after_limit() -> None:
     embedder = build_embedder(s, client=FakeEmbed())
     vs = build_vector_store(s, client=FakeOs())
     llm = build_llm(s, client=FakeConverse("SELECT ps_id FROM fact_power_station_kpi_month"))
-    engine = build_engine(s, embedder=embedder, vector_store=vs, llm=llm, memory=InMemoryMemory())
+    engine = build_engine(s, embedder=embedder, vector_store=vs, llm=llm, memory=InMemoryMemory(),
+                          entity_dictionary=None)
     gw = build_gateway(s, engine=engine, counter_store=build_counter_store(s, client=FakeDynamo()))
 
     r1 = gw.handle(GatewayRequest(body={"question": "q"}, authorizer_claims={"sub": "u"}, request_id="a"))
