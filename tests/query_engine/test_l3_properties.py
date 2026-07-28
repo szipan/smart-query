@@ -6,8 +6,15 @@ from hypothesis import given, settings
 from hypothesis import strategies as st
 
 from query_engine.deps import EngineDependencies
-from query_engine.models import AnswerStatus, CallerIdentity, QueryRequest, QuerySource
+from query_engine.models import AnswerStatus, CallerIdentity, QueryRequest, QuerySource, SemanticSlots
 from query_engine.orchestrator import QueryOrchestrator
+
+_CANON_JSON = ('{"canonical":"canon","slots":{"comparison":"GT","threshold":"1000000W",'
+               '"metric":"装机容量","sort_direction":"DESC","output_entity":"电站","product_line":["户用"]}}')
+# 归一后 group_by/agg_func 会按默认值填充（output_entity / SUM）
+_SLOTS = SemanticSlots(comparison="GT", threshold_watts=1000000, metric="装机容量",
+                       group_by="电站", agg_func="SUM", sort_direction="DESC",
+                       output_entity="电站", product_line=("户用",))
 
 from qe_fakes import (
     FakeEmbedder,
@@ -24,10 +31,11 @@ from query_engine.config import CACHE_NAMESPACE
 
 def _deps(cache_hit=False):
     vs = FakeVectorStore(
-        data={CACHE_NAMESPACE: [{"similarity": 0.99, "pre_isolation_sql": "SELECT ps_id FROM t"}]} if cache_hit else {}
+        data={CACHE_NAMESPACE: [{"similarity": 0.99, "pre_isolation_sql": "SELECT ps_id FROM t",
+                                 "slots_json": _SLOTS.to_json()}]} if cache_hit else {}
     )
     return EngineDependencies(
-        memory=FakeMemory(), llm=FakeLlm(), embedder=FakeEmbedder(), vector_store=vs,
+        memory=FakeMemory(), llm=FakeLlm(out=_CANON_JSON), embedder=FakeEmbedder(), vector_store=vs,
         entity_dictionary=FakeEntityDictionary(), layer4=FakeLayer4Client(),
         guard_factory=FakeGuardFactory(), datasource=None,
     )
@@ -53,14 +61,15 @@ def test_request_immutable(q: str) -> None:
 def test_fixed_order(q: str) -> None:
     ans = QueryOrchestrator(_deps()).run(_req(q))
     nodes = [t.node for t in ans.request_traces]
-    assert nodes[:3] == ["context_rewrite", "term_normalization", "semantic_cache_lookup"]
+    assert nodes[:4] == [
+        "context_rewrite", "term_normalization", "canonical_rewrite", "semantic_cache_lookup",
+    ]
 
 
 # Property 1：缓存命中仍过 L5
-@settings(max_examples=30)
-@given(q=st.text(min_size=1, max_size=30))
-def test_cache_hit_still_guarded(q: str) -> None:
-    ans = QueryOrchestrator(_deps(cache_hit=True)).run(_req(q))
+# 用不含比较/阈值/排序/TopN 关键词的固定问题，使规则型抽取不改动槽位、与缓存条目一致
+def test_cache_hit_still_guarded() -> None:
+    ans = QueryOrchestrator(_deps(cache_hit=True)).run(_req("查询户用电站的装机容量"))
     nodes = [t.node for t in ans.request_traces]
     assert ans.sql_source is QuerySource.CACHE_HIT
     assert "layer5_guard" in nodes

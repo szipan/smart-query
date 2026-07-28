@@ -161,3 +161,134 @@ graph TD
 - **SQLBot 参考红线**：术语库软通道（T5.2）先读 SQLBot 借思路、clean-room 重写。
 - **依赖顺序**：骨架→模型/抽象→三类本层节点（改写/归一化/缓存）与下游委派→编排器→收尾/观测/边界→属性测试。
 - 属性测试用例量大，CI 单独分组。
+
+## Increment：canonical_rewrite（规范化改写，提升缓存命中率）
+
+> 本增量在既有 L3 之上**新增规范化改写节点**。编排顺序更新为：`context_rewrite → term_normalization →【canonical_rewrite（新）】→ semantic_cache_lookup →（命中: L5 | 未命中: L4 → L5）`，**取代 Task 10 中的三节点顺序**。
+> 核心变更：`QueryContext` 新增 `canonical_question`；**缓存 store/lookup 与传给 L4 的问题都改用 `canonical_question`**（两条红线不变：命中仍过 L5；缓存只存隔离前 SQL）。
+> 依据：requirements.md Requirement 16；design.md §3.4 / §5.3 / §8.5 与 Property 11/12/13。
+> **先读 SQLBot**：确定性替换的 Aho-Corasick 复用硬通道运行时匹配器思路，clean-room 重写、不复制源码。
+
+- [x] 15. 数据模型与配置增量
+  - `QueryContext` 新增 `canonical_question: Optional[str]`（追加式，不破坏既有字段）
+  - `config.py` 新增 `CANONICAL_LLM_ENABLED=True`、`CANONICAL_REWRITE_MAX_LEN=200`（Rewrite_Max_Len）。注：LLM 模型 id 由 `BedrockLlmClient` 适配器绑定，`LlmClient.complete` 不含 model_id，故不新增 canonical_model_id 常量
+  - 单测：默认值；`canonical_question` 追加写入不影响 `request` 不可变
+  - _Requirements: 16.9_
+
+- [x] 16. 确定性替换源 `TermReplacer`（synonyms→标准词 · Aho-Corasick）
+  - 定义 `TermReplacer` 抽象（`replace(text)->str`）；适配器实现从术语库权威存储（DynamoDB `knowledge_glossary`）加载**启用**术语的 `synonyms→标准词`，构建 Aho-Corasick，最长匹配优先、避免子串误替换；确定性、不调 LLM
+  - 枚举值同义词（如产品线：标准词=户用，synonyms=[家用, 家庭户用, residential, ...]）按软通道术语库建模
+  - wiring 注入 `deps.term_replacer`
+  - 单测（mock 术语库数据）：命中替换、未登记词不动、子串不误替换、同输入同输出（确定性）
+  - _Requirements: 16.3_
+
+- [x] 17. 单位/数字规则归一 `UnitNormalizer`（纯函数）
+  - 规则归一：`1MW`/`一百万瓦`/`1000000瓦`/`100万w` → `1000000W`；中文数字与量词（万/亿）换算；大小写、全半角统一
+  - 单测：覆盖上述各写法；无单位/非数字文本不误改；确定性
+  - _Requirements: 16.4_
+
+- [x] 18. `CanonicalRewriter` 节点（三段 A/B/C + 逐级回退）
+  - 阶段A：`term_replacer.replace` + `UnitNormalizer.normalize`
+  - 阶段B：`temperature=0` LLM 结构规范化，提示词硬约束语义槽位（过滤/比较/阈值/单位/聚合维度/聚合函数/排序方向/排序字段/输出字段）；输出超 `rewrite_max_len` 或调用失败 → 回退阶段A + warning
+  - 阶段C：对阶段B 产出再跑一次确定性替换兜底；最差回退 `standalone_question`
+  - 写入 `ctx.canonical_question`
+  - 单测（mock llm/term_replacer）：阶段A 确定性；LLM 失败/超长回退；全失败回退 standalone；`canonical_question` 恒非空
+  - _Requirements: 16.1, 16.2, 16.5, 16.6, 16.7, 16.8, 16.9, 16.13_
+
+- [x] 19. 编排器接线 + 缓存/L4 改用 `canonical_question`
+  - 编排器在 term_normalization 后、semantic_cache_lookup 前插入 `canonical_rewrite` 节点（含计时/trace）
+  - `SemanticCache.lookup`/`store` 的向量化键改用 `ctx.canonical_question`
+  - 委派 L4 的 `PipelineInput` 问题改用 `ctx.canonical_question`
+  - 单测/回归：固定顺序含 canonical_rewrite；缓存键与 L4 问题均为 canonical_question；命中仍过 L5；缓存仍只存隔离前 SQL
+  - _Requirements: 16.1, 16.10, 16.11, 1.1, 5.1, 8.1_
+
+- [x] 20. 层边界自检增量
+  - 断言 `canonical_rewrite` 不解析/写入 org_ids/ps_ids、不构造带权限过滤 SQL
+  - 单测：越界检测
+  - _Requirements: 16.12_
+
+- [x] 21. 属性测试增量（Property 11/12/13）
+  - hypothesis 覆盖：阶段A/C 确定性（P11）；缓存键与 L4 问题恒为 canonical_question（P12）；任一阶段失败逐级回退、canonical_question 恒非空、主流程不中断（P13）
+  - _Requirements: 16.3, 16.4, 16.6, 16.7, 16.8, 16.9, 16.10, 16.11, 16.13_
+
+- [x] 22. 缓存召回评测（eval 数据集 + 集成测试 + 报告脚本）
+  - 使用 `eval/cache_recall/positives.csv`（24 正例 + 基准 Q0）与 `negatives.csv`（困难反例）
+  - 集成测试：独立命名空间只写入 Q0；对每条正例走完整 canonical_rewrite→lookup，断言命中且命中的是 Q0 条目、返回隔离前 SQL、命中后仍过 L5；对反例断言不命中 Q0
+  - 报告脚本：产出 正例召回率 / 反例拒绝率 / 误命中数 / 命中缓存键 / 相似度分布；输出改造前后对比
+  - 语义槽位保持检查：正例规范化后关键槽位不变；反例槽位差异被保留
+  - _Requirements: 5.1, 5.2, 6.2, 6.3, 7.1, 7.2, 16.10, 16.11_
+
+- [ ] 23. 真实依赖冒烟（Bedrock + AOSS）
+  - 设好环境变量后，用真实 Embedder/LLM/VectorStore 跑正例+反例召回，记录相似度分布与改写稳定性
+  - 观察 0.95 阈值下正例召回与反例拒绝，必要时回报是否需调阈值（阈值改动需另行确认，不在本增量擅自调整）
+  - _Requirements: 15.2, 15.3_
+
+### Increment 依赖顺序
+
+```json
+{
+  "waves": [
+    { "wave": 1, "tasks": ["15", "16", "17"] },
+    { "wave": 2, "tasks": ["18"] },
+    { "wave": 3, "tasks": ["19", "20"] },
+    { "wave": 4, "tasks": ["21", "22"] },
+    { "wave": 5, "tasks": ["23"] }
+  ]
+}
+```
+
+## Increment：语义槽位指纹缓存门禁（Slot Fingerprint Gate，拒误命中）
+
+> 依据：requirements.md Requirement 17；design.md §5.4 / §6.2 / §8.5 / §8.6 与 Property 14/15/16。
+> 动机（实测）：规范化改写把正例相似度抬到 ~0.90–0.98，但嵌入无法区分“升序/降序、大于/小于、单位量级、按电站/按机型”等关键槽位（N5 余弦 0.94–0.997 高于全部正例），换嵌入模型（Cohere ml-v3）也不解决。故在向量召回之上加结构化槽位精确门禁。
+> 分工：向量相似度=召回；Semantic_Slots 全等=门禁（fail-safe，绝不误命中）。两条红线不变：命中仍过 L5；缓存只存隔离前 SQL。
+
+- [ ] 24. 数据模型：`SemanticSlots`（models.py）+ `QueryContext.semantic_slots`
+  - 字段：comparison/threshold_watts/metric/group_by/agg_func/sort_direction/sort_field/output_entity/product_line/top_n/extra_filters
+  - `to_json`/`from_json`（缓存序列化）；`slots_equal` 关键槽位全等比较
+  - 单测：序列化往返、相等/不等、缺字段
+  - _Requirements: 17.1, 17.7_
+
+- [ ] 25. `CanonicalRewriter` 产出 slots（合并式 LLM 结构化 + 确定性归一 + fail-safe）
+  - 阶段B 改为结构化输出 `{"canonical","slots"}`（temperature=0）
+  - 归一：单位→瓦整数、方向/运算/聚合→枚举、术语→标准词（复用 UnitNormalizer/TermReplacer）
+  - 解析失败/缺失 → `semantic_slots=None`（fail-safe），canonical 仍三段回退
+  - 单测（mock llm）：正常抽取+归一；JSON 坏 → slots=None 且 canonical 正常；确定性归一可复现
+  - _Requirements: 17.1, 17.2, 17.3_
+
+- [ ] 26. `SemanticCache` 门禁：store 存 slots；lookup=向量召回 top_k + 槽位全等
+  - `store(question, pre_isolation_sql, slots)` → payload 增 `slots_json`
+  - `lookup(question, slots)`：top_k≥1 召回 → 相似度≥阈值候选 → 首个 `slots_equal` 者命中；任一侧 slots 为空 → 未命中
+  - 单测（mock 向量库）：槽位全等才命中；关键槽位不等即未命中（即便 sim=0.99）；slots=None → 未命中
+  - _Requirements: 17.4, 17.5, 17.6, 17.7_
+
+- [ ] 27. 编排器接线
+  - lookup 传 `ctx.semantic_slots`；store 传 `ctx.semantic_slots`
+  - 回归：命中仍过 L5；缓存仍只存隔离前 SQL；固定顺序不变
+  - _Requirements: 17.5, 17.8_
+
+- [ ] 28. 属性测试（Property 14/15/16）
+  - 关键槽位不等 ⟹ 未命中（即便 sim≥阈值）；任一侧 slots 空 ⟹ 未命中；命中 ⟹ 槽位全等 ∧ sim≥阈值
+  - _Requirements: 17.3, 17.5, 17.6, 17.7_
+
+- [ ] 29. eval 重跑（AOSS，公网切换→跑→恢复）
+  - 冒烟脚本增加槽位门禁；对正例断言（同槽位）命中、对反例断言（异槽位）不命中；产出召回↑、误命中→0 的对比
+  - 阈值可放宽以观察召回上限（阈值默认改动仍作独立议题）
+  - _Requirements: 17.5, 17.6, 5.1, 6.2_
+
+### Increment 依赖顺序
+```json
+{ "waves": [ {"wave":1,"tasks":["24"]}, {"wave":2,"tasks":["25","26"]}, {"wave":3,"tasks":["27","28"]}, {"wave":4,"tasks":["29"]} ] }
+```
+
+## Increment：抽取确定性加固（规则型抽取 + 抽取模型独立配置）
+
+> 依据：requirements.md Req 17.10 / 17.11；design.md §5.4。
+> 动机（实测）：新型旗舰模型（Opus 5 / Sonnet 5）取消 temperature → 抽取非确定性 → "入库槽位≠查询槽位" → 召回崩（精确率不受影响）。故把最具判别性的槽位改为规则型确定性抽取，并把抽取模型独立可配置、钉在支持 temperature=0 的模型上。
+
+- [x] 30. `LlmClient.complete` 增 `model_id` 形参；`EngineDependencies.canonical_model_id`；`AwsSettings.slot_extraction_model_id`（env `SMARTQUERY_SLOT_MODEL_ID`，默认 Sonnet 4.6）；wiring 注入
+- [x] 31. `BedrockLlmClient`：模型拒绝 `temperature` 时自动去参重试（兼容 Opus 5 / Sonnet 5 等）
+- [x] 32. `CanonicalRewriter`：规则型确定性抽取 comparison/threshold_watts/sort_direction/top_n（基于 stage_a），覆盖 LLM 值；LLM 调用传 `model_id`
+- [x] 33. orchestrator 传 `deps.canonical_model_id`；FakeLlm 接受 `model_id`
+- [x] 34. 单测：规则抽取（比较符/阈值/方向/TopN 确定性且覆盖 LLM）、model_id 透传
+- _Requirements: 17.2, 17.10, 17.11_

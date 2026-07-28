@@ -3,8 +3,16 @@
 import copy
 
 from query_engine.config import CACHE_NAMESPACE
-from query_engine.models import AnswerStatus, QuerySource
+from query_engine.models import AnswerStatus, QuerySource, SemanticSlots
 from query_engine.orchestrator import QueryOrchestrator
+
+# 规范化改写 LLM 结构化输出（用于让 canonical_rewrite 产出 slots）
+_CANON_JSON = ('{"canonical":"canon","slots":{"comparison":"GT","threshold":"1000000W",'
+               '"metric":"装机容量","group_by":"电站","agg_func":"SUM","sort_direction":"DESC",'
+               '"sort_field":"装机容量","output_entity":"电站","product_line":["户用"]}}')
+_SLOTS = SemanticSlots(comparison="GT", threshold_watts=1000000, metric="装机容量",
+                       group_by="电站", agg_func="SUM", sort_direction="DESC",
+                       sort_field="装机容量", output_entity="电站", product_line=("户用",))
 
 from qe_fakes import (
     FakeEmbedder,
@@ -40,14 +48,18 @@ def test_miss_path_ok_returns_safe_sql_no_rows(deps, request_obj) -> None:
 def test_fixed_node_order(deps, request_obj) -> None:
     ans = QueryOrchestrator(deps).run(request_obj)
     nodes = [t.node for t in ans.request_traces]
-    assert nodes[:3] == ["context_rewrite", "term_normalization", "semantic_cache_lookup"]
+    assert nodes[:4] == [
+        "context_rewrite", "term_normalization", "canonical_rewrite", "semantic_cache_lookup",
+    ]
     assert "layer4_pipeline" in nodes and "layer5_guard" in nodes
 
 
 def test_cache_hit_skips_layer4_but_still_guards() -> None:
-    vs = FakeVectorStore(data={CACHE_NAMESPACE: [{"similarity": 0.99, "pre_isolation_sql": "SELECT ps_id FROM t"}]})
+    vs = FakeVectorStore(data={CACHE_NAMESPACE: [
+        {"similarity": 0.99, "pre_isolation_sql": "SELECT ps_id FROM t",
+         "slots_json": _SLOTS.to_json()}]})
     l4 = FakeLayer4Client()
-    d = _deps(vector_store=vs, layer4=l4)
+    d = _deps(vector_store=vs, layer4=l4, llm=FakeLlm(out=_CANON_JSON))
     from query_engine.models import CallerIdentity, QueryRequest
     req = QueryRequest(request_id="r", identity=CallerIdentity(user_id="1001"), raw_question="q")
     ans = QueryOrchestrator(d).run(req)
@@ -86,7 +98,7 @@ def test_rejected_answer() -> None:
 
 def test_store_on_pipeline_success() -> None:
     vs = FakeVectorStore()
-    d = _deps(vector_store=vs)
+    d = _deps(vector_store=vs, llm=FakeLlm(out=_CANON_JSON))
     from query_engine.models import CallerIdentity, QueryRequest
     req = QueryRequest(request_id="r", identity=CallerIdentity(user_id="1001"), raw_question="q")
     QueryOrchestrator(d).run(req)

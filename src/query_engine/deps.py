@@ -19,7 +19,8 @@ class MemoryClient(Protocol):
 
 
 class LlmClient(Protocol):
-    def complete(self, *, system: str, prompt: str, max_tokens: int = 1024, temperature: float = 0.0) -> str: ...
+    def complete(self, *, system: str, prompt: str, model_id: Optional[str] = None,
+                 max_tokens: int = 1024, temperature: float = 0.0) -> str: ...
 
 
 class Embedder(Protocol):
@@ -36,6 +37,13 @@ class EntityDictionary(Protocol):
     """硬归一化字典：对问题做确定性精确/别名匹配，返回命中的实体（不调 LLM）。"""
 
     def match(self, question: str) -> list[dict[str, Any]]: ...
+
+
+class TermReplacer(Protocol):
+    """规范化改写确定性替换源：读软术语库登记的 synonyms→标准词，
+    以 Aho-Corasick 精确匹配把变体词替换为标准词（确定性、不调 LLM、无随机）。"""
+
+    def replace(self, text: str) -> str: ...
 
 
 # ---------- 下游层客户端 ----------
@@ -86,6 +94,8 @@ class EngineDependencies:
     embedder: Optional[Embedder] = None
     vector_store: Optional[VectorStore] = None
     entity_dictionary: Optional[EntityDictionary] = None
+    term_replacer: Optional[TermReplacer] = None   # 规范化改写确定性替换源（synonyms→标准词）
+    canonical_model_id: Optional[str] = None       # 槽位抽取专用模型（独立于主生成模型；None=用默认）
     layer4: Optional[Layer4Client] = None
     guard_factory: Optional[Layer5GuardFactory] = None
     datasource: Optional[DatasourceAdapter] = None  # 本期可为 None（不执行）

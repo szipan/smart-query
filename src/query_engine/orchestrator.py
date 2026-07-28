@@ -23,6 +23,7 @@ from query_engine.models import (
     QueryRequest,
     QuerySource,
 )
+from query_engine.nodes.canonical_rewriter import CanonicalRewriter
 from query_engine.nodes.context_rewriter import ContextRewriter
 from query_engine.nodes.semantic_cache import SemanticCache
 from query_engine.nodes.term_normalizer import HardEntityResolver, SoftGlossaryResolver, TermNormalizer
@@ -43,6 +44,8 @@ class QueryOrchestrator:
             HardEntityResolver(deps.entity_dictionary),
             SoftGlossaryResolver(deps.embedder, deps.vector_store),
         )
+        self._canonical = CanonicalRewriter(deps.llm, deps.term_replacer,
+                                            model_id=deps.canonical_model_id)
         self._cache = SemanticCache(deps.embedder, deps.vector_store)
 
     # ---- 节点执行包装：计时 + 追踪 ----
@@ -66,10 +69,12 @@ class QueryOrchestrator:
         self._node(ctx, "context_rewrite", self._rewriter.run)
         # ② 术语归一化
         self._node(ctx, "term_normalization", self._term.run)
-        # ③ 语义缓存 lookup
+        # ③ 规范化改写（→ canonical_question）
+        self._node(ctx, "canonical_rewrite", self._canonical.run)
+        # ④ 语义缓存 lookup（键 = canonical_question）
         self._node(ctx, "semantic_cache_lookup", self._lookup_node)
 
-        # ④ 分支：命中短路 L4，未命中走 L4；两分支都进 L5
+        # ⑤ 分支：命中短路 L4，未命中走 L4；两分支都进 L5
         if ctx.cache_lookup and ctx.cache_lookup.hit:
             ctx.pre_isolation_sql = ctx.cache_lookup.pre_isolation_sql
             ctx.sql_source = QuerySource.CACHE_HIT
@@ -78,12 +83,12 @@ class QueryOrchestrator:
             if terminal is not None:
                 return self._finalize(ctx, terminal)
 
-        # ⑤ Layer 5 守卫（命中/未命中都经此）
+        # ⑥ Layer 5 守卫（命中/未命中都经此）
         terminal = self._invoke_layer5(ctx)
         if terminal is not None:
             return self._finalize(ctx, terminal)
 
-        # ⑥ 本期跳过 execute（不执行、不取数）—— 直接以 safe_sql 组装 OK 答案
+        # ⑦ 本期跳过 execute（不执行、不取数）—— 直接以 safe_sql 组装 OK 答案
         answer = Answer(
             request_id=request.request_id,
             status=AnswerStatus.OK,
@@ -93,10 +98,10 @@ class QueryOrchestrator:
             request_traces=tuple(ctx.traces),
         )
 
-        # ⑦ 缓存 store（本期放宽：未命中(PIPELINE) ∧ L5 通过 → 存隔离前 SQL）
+        # ⑧ 缓存 store（本期放宽：未命中(PIPELINE) ∧ L5 通过 → 存隔离前 SQL；键 = canonical_question）
         if ctx.sql_source == QuerySource.PIPELINE:
             try:
-                self._cache.store(ctx.standalone_question, ctx.pre_isolation_sql)
+                self._cache.store(ctx.canonical_question, ctx.pre_isolation_sql, ctx.semantic_slots)
             except Exception as e:
                 ctx.warnings.append(f"缓存 store 失败: {e!r}")
 
@@ -105,7 +110,7 @@ class QueryOrchestrator:
     # ---- 节点：缓存 lookup（失败按未命中 + warning）----
     def _lookup_node(self, ctx: QueryContext) -> None:
         try:
-            ctx.cache_lookup = self._cache.lookup(ctx.standalone_question)
+            ctx.cache_lookup = self._cache.lookup(ctx.canonical_question, ctx.semantic_slots)
         except Exception as e:
             ctx.cache_lookup = None
             ctx.warnings.append(f"缓存 lookup 失败按未命中处理: {e!r}")
@@ -116,7 +121,7 @@ class QueryOrchestrator:
         started = time.monotonic()
         l4req = Layer4Request(
             request_id=req.request_id,
-            standalone_question=ctx.standalone_question or req.raw_question,
+            standalone_question=ctx.canonical_question or ctx.standalone_question or req.raw_question,
             resolved_entities=tuple(ctx.resolved_entities),
             resolved_terms=tuple(ctx.resolved_terms),
             datasource_id=req.datasource_id,

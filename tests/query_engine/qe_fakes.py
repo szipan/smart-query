@@ -30,8 +30,9 @@ class FakeLlm:
         self._out = out
         self.calls: list[dict] = []
 
-    def complete(self, *, system: str, prompt: str, max_tokens: int = 1024, temperature: float = 0.0) -> str:
-        self.calls.append({"system": system, "prompt": prompt})
+    def complete(self, *, system: str, prompt: str, model_id=None,
+                 max_tokens: int = 1024, temperature: float = 0.0) -> str:
+        self.calls.append({"system": system, "prompt": prompt, "model_id": model_id})
         return self._out
 
 

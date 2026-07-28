@@ -58,14 +58,24 @@ class BedrockLlmClient:
         temperature: float = 0.0,
     ) -> str:
         mid = model_id or self._default_model_id
-        kwargs: dict[str, Any] = {
-            "modelId": mid,
-            "messages": [{"role": "user", "content": [{"text": prompt}]}],
-            "inferenceConfig": {"maxTokens": max_tokens, "temperature": temperature},
-        }
-        if system:
-            kwargs["system"] = [{"text": system}]
-        resp = self._client.converse(**kwargs)
+
+        def _call(inference_config: dict[str, Any]):
+            kwargs: dict[str, Any] = {
+                "modelId": mid,
+                "messages": [{"role": "user", "content": [{"text": prompt}]}],
+                "inferenceConfig": inference_config,
+            }
+            if system:
+                kwargs["system"] = [{"text": system}]
+            return self._client.converse(**kwargs)
+
+        try:
+            resp = _call({"maxTokens": max_tokens, "temperature": temperature})
+        except Exception as e:  # 部分较新模型（如 Opus 5）不接受 temperature -> 去掉后重试
+            if "temperature" in str(e).lower():
+                resp = _call({"maxTokens": max_tokens})
+            else:
+                raise
         return _extract_converse_text(resp)
 
 

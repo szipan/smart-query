@@ -1,7 +1,7 @@
 """Task 4/5/6 单测：上下文改写、术语归一化、语义缓存。Requirements 2/3/4/5/6/7。"""
 
 from query_engine.config import CACHE_NAMESPACE
-from query_engine.models import CallerIdentity, QueryContext, QueryRequest
+from query_engine.models import CallerIdentity, QueryContext, QueryRequest, SemanticSlots
 from query_engine.nodes.context_rewriter import ContextRewriter
 from query_engine.nodes.semantic_cache import SemanticCache
 from query_engine.nodes.term_normalizer import HardEntityResolver, SoftGlossaryResolver, TermNormalizer
@@ -134,27 +134,58 @@ def test_term_normalizer_writes_both() -> None:
     assert ctx.resolved_entities and ctx.resolved_terms
 
 
-# ---- SemanticCache ----
-def test_cache_hit_above_threshold() -> None:
-    vs = FakeVectorStore(data={CACHE_NAMESPACE: [{"similarity": 0.97, "pre_isolation_sql": "SELECT 1", "entry_id": "e1"}]})
-    res = SemanticCache(FakeEmbedder(), vs).lookup("q")
+# ---- SemanticCache（向量召回 + 槽位门禁）----
+_SLOTS = SemanticSlots(comparison="GT", threshold_watts=1000000, metric="装机容量",
+                       group_by="电站", agg_func="SUM", sort_direction="DESC",
+                       sort_field="装机容量", output_entity="电站", product_line=("户用",))
+
+
+def test_cache_hit_above_threshold_and_slots_match() -> None:
+    vs = FakeVectorStore(data={CACHE_NAMESPACE: [
+        {"similarity": 0.97, "pre_isolation_sql": "SELECT 1", "entry_id": "e1",
+         "slots_json": _SLOTS.to_json()}]})
+    res = SemanticCache(FakeEmbedder(), vs).lookup("q", _SLOTS)
     assert res.hit and res.pre_isolation_sql == "SELECT 1"
 
 
+def test_cache_miss_when_slots_mismatch_even_if_similar() -> None:
+    # 相似度极高，但排序方向不同（升序）→ 槽位门禁判未命中（Property 14）
+    other = SemanticSlots(comparison="GT", threshold_watts=1000000, metric="装机容量",
+                          group_by="电站", agg_func="SUM", sort_direction="ASC",
+                          sort_field="装机容量", output_entity="电站", product_line=("户用",))
+    vs = FakeVectorStore(data={CACHE_NAMESPACE: [
+        {"similarity": 0.999, "pre_isolation_sql": "SELECT 1", "slots_json": other.to_json()}]})
+    assert SemanticCache(FakeEmbedder(), vs).lookup("q", _SLOTS).hit is False
+
+
+def test_cache_miss_when_request_slots_none() -> None:
+    vs = FakeVectorStore(data={CACHE_NAMESPACE: [
+        {"similarity": 0.999, "pre_isolation_sql": "SELECT 1", "slots_json": _SLOTS.to_json()}]})
+    assert SemanticCache(FakeEmbedder(), vs).lookup("q", None).hit is False  # fail-safe（Property 15）
+
+
 def test_cache_miss_below_threshold() -> None:
-    vs = FakeVectorStore(data={CACHE_NAMESPACE: [{"similarity": 0.5, "pre_isolation_sql": "SELECT 1"}]})
-    assert SemanticCache(FakeEmbedder(), vs).lookup("q").hit is False
+    vs = FakeVectorStore(data={CACHE_NAMESPACE: [
+        {"similarity": 0.5, "pre_isolation_sql": "SELECT 1", "slots_json": _SLOTS.to_json()}]})
+    assert SemanticCache(FakeEmbedder(), vs).lookup("q", _SLOTS).hit is False
 
 
 def test_cache_miss_no_hits() -> None:
-    assert SemanticCache(FakeEmbedder(), FakeVectorStore()).lookup("q").hit is False
+    assert SemanticCache(FakeEmbedder(), FakeVectorStore()).lookup("q", _SLOTS).hit is False
 
 
-def test_cache_store_only_pre_isolation_sql() -> None:
+def test_cache_store_pre_isolation_sql_and_slots() -> None:
     vs = FakeVectorStore()
-    SemanticCache(FakeEmbedder(), vs).store("q", "SELECT ps_id FROM t")
+    SemanticCache(FakeEmbedder(), vs).store("q", "SELECT ps_id FROM t", _SLOTS)
     assert len(vs.upserts) == 1
     ns, entry = vs.upserts[0]
     assert ns == CACHE_NAMESPACE
     assert entry["pre_isolation_sql"] == "SELECT ps_id FROM t"
+    assert entry["slots_json"] == _SLOTS.to_json()
     assert "safe_sql" not in entry  # 绝不存 safe_sql
+
+
+def test_cache_store_skips_when_slots_none() -> None:
+    vs = FakeVectorStore()
+    SemanticCache(FakeEmbedder(), vs).store("q", "SELECT 1", None)
+    assert vs.upserts == []  # 无 slots 不入缓存（无法门禁）

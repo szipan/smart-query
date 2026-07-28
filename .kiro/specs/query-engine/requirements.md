@@ -46,6 +46,13 @@ Layer 3 是运行在 EKS 上的 Python 服务，唯一使命是把 Layer 2 透�
 - **Cache_Similarity_Threshold**：语义缓存命中阈值，默认 0.95。
 - **Cache_Namespace**：语义缓存命名空间，取值 `semantic_cache`。
 - **Glossary_Namespace**：软术语库命名空间，取值 `glossary`。
+- **Canonical_Rewriter**：规范化改写节点，位于术语归一化之后、语义缓存查找之前，把措辞各异但意图相同的问题折叠为统一标准叙述（Canonical_Question），以提升缓存命中率。
+- **Canonical_Question**：规范化改写产物；供语义缓存 store/lookup 与委派 Layer 4 统一使用的标准问题文本。
+- **Deterministic_Term_Replacement**：确定性同义词替换，读取软术语库登记的 `synonyms→标准词`，用 Aho-Corasick 精确匹配把变体词替换为标准词；确定性、不调 LLM、无随机。
+- **Unit_Normalization**：单位/数字规则归一，把 `1MW`/`一百万瓦`/`1000000瓦` 等等价写法按规则换算并统一为标准写法（如 `1000000W`）；规则型，非同义词枚举。
+- **Rewrite_Max_Len**：规范化改写 LLM 输出长度上限；超长则回退到 LLM 改写前的确定性替换结果。
+- **Semantic_Slots**：从问题抽取并归一的结构化语义槽位（比较运算、阈值+单位、指标、聚合维度、聚合函数、排序方向、排序字段、输出主体、产品线取值、TopN、附加过滤等），用于缓存命中的精确判定。
+- **Slot_Gate**：语义缓存命中的精确门禁——在向量召回候选之上，要求候选与请求的 Semantic_Slots 在关键槽位全等，才判命中；任一不等或缺失即判未命中（fail-safe，绝不误命中）。
 
 ## Requirements
 
@@ -55,7 +62,7 @@ Layer 3 是运行在 EKS 上的 Python 服务，唯一使命是把 Layer 2 透�
 
 #### Acceptance Criteria
 
-1. WHEN THE Query_Orchestrator 收到一个 Query_Request, THE Query_Orchestrator SHALL 按固定顺序执行 context_rewrite、term_normalization、semantic_cache_lookup 三个节点。
+1. WHEN THE Query_Orchestrator 收到一个 Query_Request, THE Query_Orchestrator SHALL 按固定顺序执行 context_rewrite、term_normalization、canonical_rewrite、semantic_cache_lookup 四个节点。
 2. WHEN THE Semantic_Cache 的 Cache_Lookup 结果为命中, THE Query_Orchestrator SHALL 跳过 Layer4_Client 并直接进入 Layer5_Guard。
 3. WHEN THE Semantic_Cache 的 Cache_Lookup 结果为未命中, THE Query_Orchestrator SHALL 先调用 Layer4_Client 再进入 Layer5_Guard。
 4. THE Query_Orchestrator SHALL 使命中路径与未命中路径均在 Layer5_Guard 之后才进入执行节点。
@@ -102,7 +109,7 @@ Layer 3 是运行在 EKS 上的 Python 服务，唯一使命是把 Layer 2 透�
 
 #### Acceptance Criteria
 
-1. WHEN THE Semantic_Cache 执行 lookup, THE Semantic_Cache SHALL 经 Embedder 向量化 Standalone_Question 并在 Cache_Namespace 以 top_k 等于 1 做相似检索。
+1. WHEN THE Semantic_Cache 执行 lookup, THE Semantic_Cache SHALL 经 Embedder 向量化 Canonical_Question 并在 Cache_Namespace 以 top_k 等于 1 做相似检索。
 2. IF 最相似条目的相似度大于等于 Cache_Similarity_Threshold（0.95）, THEN THE Semantic_Cache SHALL 返回 hit 为 True 且携带该条目的 Pre_Isolation_SQL 与相似度分值。
 3. IF 最相似条目的相似度小于 0.95, THEN THE Semantic_Cache SHALL 返回 hit 为 False。
 4. IF THE Vector_Store 检索无结果, THEN THE Semantic_Cache SHALL 返回 hit 为 False。
@@ -136,7 +143,7 @@ Layer 3 是运行在 EKS 上的 Python 服务，唯一使命是把 Layer 2 透�
 
 #### Acceptance Criteria
 
-1. WHEN 缓存未命中, THE Query_Orchestrator SHALL 构造一个 Pipeline_Input，其 standalone_question 等于 Query_Context.standalone_question，并携带 Query_Context.resolved_entities 与 Query_Context.resolved_terms。
+1. WHEN 缓存未命中, THE Query_Orchestrator SHALL 构造一个 Pipeline_Input，其 standalone_question 字段填入 Query_Context.canonical_question（规范化后的问题），并携带 Query_Context.resolved_entities 与 Query_Context.resolved_terms。
 2. THE Query_Orchestrator SHALL 构造不含任何 org_ids 或 ps_ids 字段的 Pipeline_Input。
 3. WHEN THE Pipeline_Result.status 等于 OK, THE Query_Orchestrator SHALL 取 Pipeline_Result.unvalidated_sql 写入 Query_Context.pre_isolation_sql 并将 Query_Context.sql_source 置为 PIPELINE。
 4. IF THE Pipeline_Result.status 等于 NO_SQL, THEN THE Query_Orchestrator SHALL 返回状态为 NO_SQL 的 Answer 且不写缓存、不执行 SQL。
@@ -217,6 +224,46 @@ Layer 3 是运行在 EKS 上的 Python 服务，唯一使命是把 Layer 2 透�
 2. THE Query_Engine SHALL 与 Layer 4 共用同一套 Vector_Store 与 Embedder 抽象。
 3. THE Query_Engine SHALL 使用 AgentCore Memory 承载多轮会话、使用 AgentCore Identity 托管身份与凭证。
 
+### Requirement 16: 规范化改写（Canonical Rewrite —— 提升缓存命中率）
+
+**User Story:** 作为系统运营方，我希望措辞各异但意图相同的问题被折叠为统一的标准叙述后再进入语义缓存与下游生成，以便真正提升缓存命中率、降低生成成本，同时不牺牲隔离安全与答案准确性。
+
+#### Acceptance Criteria
+
+1. THE Query_Orchestrator SHALL 在 term_normalization 之后、semantic_cache_lookup 之前执行 canonical_rewrite 节点。
+2. WHEN THE Canonical_Rewriter 处理请求, THE Canonical_Rewriter SHALL 以 Standalone_Question 为输入，依次执行阶段A（Deterministic_Term_Replacement 与 Unit_Normalization）、阶段B（LLM 结构规范化）、阶段C（再次 Deterministic_Term_Replacement 兜底锁定标准词），产出 Canonical_Question。
+3. WHEN 执行 Deterministic_Term_Replacement, THE Canonical_Rewriter SHALL 读取软术语库登记的 `synonyms→标准词` 映射并以 Aho-Corasick 精确匹配替换，且不调用 Llm_Client、不引入随机性。
+4. WHEN 执行 Unit_Normalization, THE Canonical_Rewriter SHALL 依据规则把等价的单位/数字写法归一为统一标准写法（例如 `1MW`、`一百万瓦`、`1000000瓦` 归一为 `1000000W`）。
+5. WHEN 执行阶段B, THE Canonical_Rewriter SHALL 以 temperature 等于 0 调用 Llm_Client 做结构规范化，并在提示词中约束仅规范化叙述、不得改变过滤条件、比较运算、阈值、单位、聚合维度、排序方向与输出字段等语义槽位。
+6. IF 阶段B 的 LLM 输出长度超过 Rewrite_Max_Len, THEN THE Canonical_Rewriter SHALL 回退到阶段A 的结果作为后续输入。
+7. IF 阶段B 的 LLM 调用失败, THEN THE Canonical_Rewriter SHALL 回退到阶段A 的结果并向 Query_Context.warnings 追加一条降级记录。
+8. IF 各阶段全部失败或产出为空, THEN THE Canonical_Rewriter SHALL 将 Canonical_Question 置为 Standalone_Question（最差回退），且不中断主流程。
+9. WHEN THE Canonical_Rewriter 完成, THE Canonical_Rewriter SHALL 将结果写入 Query_Context.canonical_question。
+10. WHEN THE Semantic_Cache 执行 lookup 与 store, THE Semantic_Cache SHALL 以 Canonical_Question 作为向量化与检索/写入的键。
+11. WHEN 缓存未命中并委派 Layer 4, THE Query_Orchestrator SHALL 使 Pipeline_Input 承载的问题为 Canonical_Question。
+12. THE Canonical_Rewriter SHALL NOT 解析或写入 org_ids/ps_ids，且 SHALL NOT 构造带权限过滤的 SQL。
+13. WHEN 对同一 Standalone_Question 且术语库与单位规则不变, THE 阶段A 与阶段C SHALL 产出确定性一致的替换结果。
+
+### Requirement 17: 语义槽位指纹缓存门禁（Slot Fingerprint Gate —— 拒误命中）
+
+**User Story:** 作为系统运营方，我希望缓存命中不仅看向量相似度，还要求关键语义槽位精确一致，以便杜绝“措辞极像但语义不同”（如升序/降序、大于/小于、单位量级、按电站/按机型、户用/工商业）的误命中导致复用错误 SQL。
+
+**背景（实测依据）**：语义等价的改写变体与仅差一个关键槽位的反例，在嵌入相似度上不可分（如“升序 vs 降序”余弦 0.94~0.997，高于多数正例），且更换嵌入模型无法解决（Titan v2 与 Cohere multilingual v3 上反例 N5 均高于全部正例）。故需在向量召回之上加结构化槽位精确门禁。
+
+#### Acceptance Criteria
+
+1. WHEN THE Canonical_Rewriter 处理请求, THE Canonical_Rewriter SHALL 额外产出 Semantic_Slots，至少含：比较运算、阈值（归一为瓦的整数）、指标、聚合维度、聚合函数、排序方向、排序字段、输出主体、产品线取值（可为集合）、TopN、附加过滤。
+2. THE Semantic_Slots 抽取 SHALL 以 temperature 等于 0 的 Llm_Client 结构化输出获得（与规范化改写合并为同一次调用），并对槽位值做确定性归一（单位→瓦整数、方向/运算/聚合→枚举、术语→标准词）。
+10. THE 比较运算、阈值（瓦）、排序方向、TopN 四个高判别性槽位 SHALL 由规则型确定性抽取（基于确定性归一文本，正则/关键词），不依赖 LLM 与其温度；LLM 抽取值仅作规则未命中时的兜底。
+11. THE Semantic_Slots 抽取所用 LLM 模型 SHALL 可独立于主生成模型配置，且应选用支持 temperature 等于 0 的模型以保证抽取确定性（应对新型模型取消 temperature 的趋势）。
+3. IF 结构化输出解析失败或缺失, THEN THE Semantic_Slots SHALL 置为空（None），且不使主流程中断。
+4. WHEN THE Semantic_Cache 执行 store, THE Semantic_Cache SHALL 将该条目的 Semantic_Slots 一并写入缓存条目。
+5. WHEN THE Semantic_Cache 执行 lookup, THE Semantic_Cache SHALL 先做向量相似检索（top_k ≥ 1），再对相似度不低于阈值的候选施加 Slot_Gate：仅当候选与请求的关键槽位全等才判命中。
+6. IF 请求或候选任一侧 Semantic_Slots 为空, 或关键槽位存在不等, THEN THE Semantic_Cache SHALL 判未命中（fail-safe，绝不误命中）。
+7. THE 关键槽位集合 SHALL 为：比较运算、阈值（瓦）、指标、聚合维度、聚合函数、排序方向、排序字段、输出主体、产品线取值、TopN、附加过滤，全部相等方为命中。
+8. THE Slot_Gate SHALL NOT 解析或写入 org_ids/ps_ids，且不构造带权限过滤的 SQL（层边界不变）。
+9. WHERE 启用 Slot_Gate, THE 向量相似度阈值 SHALL 放宽至 0.85 以提升召回（门禁保证精确率与阈值无关，故不放大误命中）。默认槽位抽取模型为支持 temperature=0 的 Sonnet 4.6。
+
 ## Appendix A：正确性属性 → 验收标准 可追溯性映射
 
 下表将 `design.md` 中 Layer 3 的 10 条正确性属性（Property 1 ~ Property 10）映射到本文档中覆盖它们的验收标准，确保每条属性均有可验证的需求支撑。
@@ -225,7 +272,7 @@ Layer 3 是运行在 EKS 上的 Python 服务，唯一使命是把 Layer 2 透�
 |---------|-----------------|---------------|
 | Property 1：缓存命中仍过 Layer 5 | 命中取出的隔离前 SQL 必然经 Layer5_Guard 后才可能执行 | 1.2、1.4、6.2、6.3、9.1 |
 | Property 2：缓存永不存注入后 SQL | 写入缓存的恒为隔离前 SQL，绝不存 safe_sql | 7.1、7.2 |
-| Property 3：Layer 4 收到独立问题 | Pipeline_Input.standalone_question 为改写后的自包含问题 | 2.2、2.3、8.1 |
+| Property 3：Layer 4 收到规范化的独立问题 | Pipeline_Input 承载的问题为规范化产物 Canonical_Question（其上游为改写后的自包含 Standalone_Question） | 2.2、2.3、8.1、16.11 |
 | Property 4：L3 不注入隔离 / 不解析范围 | 送下游的载荷不含权限过滤，L3 不解析 scope | 8.2、10.1、10.2、10.3 |
 | Property 5：硬归一化确定性 | 同一实体表述恒定映射同一标准 id，不依赖 LLM / 随机 | 3.2 |
 | Property 6：编排顺序固定 | 固定节点序列，分支仅在命中 / 未命中且都经 Layer 5 | 1.1、1.2、1.3、1.4 |
@@ -233,3 +280,9 @@ Layer 3 是运行在 EKS 上的 Python 服务，唯一使命是把 Layer 2 透�
 | Property 8：上下文输入不可变 | 任一节点执行后 Query_Context.request 保持不变 | 13.5、13.6 |
 | Property 9：存缓存前置条件 | 仅"未命中 ∧ 通过 ∧ 执行成功"三者同时满足才写缓存 | 7.1、7.3、11.4 |
 | Property 10：答案状态映射 | Answer.status 与实际结果一致（OK / NO_SQL / REJECTED / UPSTREAM_ERROR） | 8.4、8.5、9.2、9.3、11.2、11.4 |
+| Property 11：规范化确定性阶段可复现 | 阶段A/C 对同输入、同术语库与单位规则产出一致（不依赖 LLM / 随机） | 16.3、16.4、16.13 |
+| Property 12：规范化产物一致使用 | 缓存 lookup/store 的键与传 Layer 4 的问题恒为 Canonical_Question | 16.9、16.10、16.11 |
+| Property 13：规范化改写永不抛断 | 任一阶段失败均逐级回退，最差回退 Standalone_Question，主流程不中断 | 16.6、16.7、16.8 |
+| Property 14：槽位门禁拒误命中 | 关键槽位存在不等 ⟹ 判未命中（即便向量相似度≥阈值） | 17.5、17.6、17.7 |
+| Property 15：槽位缺失即 fail-safe | 任一侧 Semantic_Slots 为空 ⟹ 判未命中 | 17.3、17.6 |
+| Property 16：命中蕴含槽位全等 | 判命中 ⟹ 关键槽位全等 且 向量相似度≥阈值 | 17.5、17.7 |

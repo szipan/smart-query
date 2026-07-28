@@ -18,6 +18,7 @@ from adapters.bedrock import BedrockEmbedder, BedrockLlmClient
 from adapters.dynamodb import DynamoDbCounterStore
 from adapters.entity_dictionary import build_entity_dictionary_from_dynamodb
 from adapters.opensearch import OpenSearchVectorStore, make_opensearch_client
+from adapters.term_replacer import build_term_replacer_from_dynamodb
 from adapters.settings import AwsSettings
 
 _UNSET = object()   # 区分「未提供」与「显式 None（关闭硬通道）」
@@ -170,17 +171,29 @@ def build_entity_dictionary(settings: AwsSettings, client: Any = None):
     return build_entity_dictionary_from_dynamodb(client, settings.entity_table)
 
 
+def build_term_replacer(settings: AwsSettings, client: Any = None):
+    """规范化改写确定性替换源（Aho-Corasick，从 DynamoDB 术语库加载 enabled 术语 synonyms→标准词）。"""
+    if client is None:
+        import boto3
+        client = boto3.client("dynamodb", region_name=settings.region)
+    return build_term_replacer_from_dynamodb(client, settings.glossary_table,
+                                             name_table=settings.glossary_name_table)
+
+
 def build_engine(settings: AwsSettings, *, embedder=None, vector_store=None, llm=None,
-                 memory=None, entity_dictionary=_UNSET) -> QueryOrchestrator:
+                 memory=None, entity_dictionary=_UNSET, term_replacer=_UNSET) -> QueryOrchestrator:
     """组装 L3 QueryOrchestrator（内部含真实 L4 与 L5）。
 
     entity_dictionary：未提供 → 从 DynamoDB 构造 Aho-Corasick 匹配器；显式 None → 关闭硬通道。
+    term_replacer：未提供 → 从 DynamoDB 术语库构造确定性替换源；显式 None → 规范化只做单位归一。
     """
     embedder = embedder or build_embedder(settings)
     vector_store = vector_store or build_vector_store(settings)
     llm = llm or build_llm(settings)
     if entity_dictionary is _UNSET:
         entity_dictionary = build_entity_dictionary(settings)
+    if term_replacer is _UNSET:
+        term_replacer = build_term_replacer(settings)
 
     l4_deps = StageDependencies(
         embedder=embedder, vector_store=vector_store, llm_client=llm,
@@ -193,6 +206,8 @@ def build_engine(settings: AwsSettings, *, embedder=None, vector_store=None, llm
         memory=memory or build_memory(settings),
         llm=llm, embedder=embedder, vector_store=vector_store,
         entity_dictionary=entity_dictionary,
+        term_replacer=term_replacer,
+        canonical_model_id=settings.slot_extraction_model_id or None,
         layer4=RealLayer4Adapter(l4_orch),
         guard_factory=RealGuardFactoryAdapter(iso_factory),
         datasource=None,

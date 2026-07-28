@@ -37,3 +37,13 @@ _*.txt
 # 操作系统杂项
 .DS_Store
 Thumbs.db
+
+# 评测输出（可重跑生成，不纳入版本库）；保留 eval 数据集 csv
+eval/cache_recall/recall_report*.txt
+eval/cache_recall/embed_ab_report.txt
+
+# 周报（按需手动拷贝，不纳入版本库）
+docs/weekly-report-*.html
+
+# 一次性临时脚本
+scripts/_tmp_*.py

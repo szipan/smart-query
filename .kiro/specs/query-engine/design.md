@@ -14,7 +14,7 @@
 
 Layer 3（query-engine）是智能问数系统的**核心编排器**，是一个运行在 EKS 上的 Python 服务。它的唯一使命是：把 Layer 2 透传下来的**已认证请求（身份 + 原始问题 + 会话标识）**，通过顺序驱动**本层自有节点**并**委派给下游各层**，最终转化为一个**面向当前用户的、安全的答案**。
 
-Layer 3 拥有四类自有节点：**查询编排器（Query Orchestrator）**、**上下文改写 / 指代消解（Context Rewrite，基于 AgentCore Memory 的多轮能力）**、**术语归一化（Term Normalization，硬 + 软双通道）**、**语义复用缓存（Semantic Reuse Cache，基于可插拔 VectorStore）**。它**不做认证 / 限流**（Layer 2 的职责）、**不生成 SQL**（Layer 4 的职责）、**不注入数据隔离 / 不强制只读**（Layer 5 的职责）、**不持有连接池 / 不做物理执行**（Layer 6/7 的职责）。
+Layer 3 拥有五类自有节点：**查询编排器（Query Orchestrator）**、**上下文改写 / 指代消解（Context Rewrite，基于 AgentCore Memory 的多轮能力）**、**术语归一化（Term Normalization，硬 + 软双通道）**、**规范化改写（Canonical Rewrite，把变体问法折叠为统一标准叙述）**、**语义复用缓存（Semantic Reuse Cache，基于可插拔 VectorStore）**。它**不做认证 / 限流**（Layer 2 的职责）、**不生成 SQL**（Layer 4 的职责）、**不注入数据隔离 / 不强制只读**（Layer 5 的职责）、**不持有连接池 / 不做物理执行**（Layer 6/7 的职责）。
 
 本层最关键的两条设计红线：其一，**语义缓存命中也必须经过 Layer 5**——缓存里存的是"隔离前 SQL 模板"，命中后跳过 Layer 4，但仍要按**当前用户**重新注入隔离，绝不缓存注入后的成品 SQL；其二，**多轮上下文改写只在本层做**——交给 Layer 4 的必然是一个已经自包含的独立问题，身份则原样透传给 Layer 5 解析，本层从不接触用户的数据范围（org_ids/ps_ids）。
 
@@ -28,7 +28,8 @@ Layer 3 是整个链路的"大脑与指挥棒"：它不实现 SQL 生成、不�
 
 ### 1.2 核心设计洞察（必须落地）
 
-- **编排顺序是固定不变式**：`原始问题 → 上下文改写(Memory) → 术语归一化(硬+软) → 语义缓存(命中/未命中) → [未命中] Layer 4 → Layer 5 → 执行(L6/7) → 组装答案 → 写回 Memory`。
+- **编排顺序是固定不变式**：`原始问题 → 上下文改写(Memory) → 术语归一化(硬+软) → 规范化改写(canonical) → 语义缓存(命中/未命中) → [未命中] Layer 4 → Layer 5 → 执行(L6/7) → 组装答案 → 写回 Memory`。
+- **规范化改写提升缓存命中**：在术语归一化之后、缓存查找之前，把措辞各异但意图相同的问题折叠为统一的 `canonical_question`；**缓存 store/lookup 与传给 Layer 4 的问题都统一改用它**。这样"户用/家用/residential""1MW/一百万瓦/1000000w""倒序/降序/从大到小"等变体能收拢到同一标准叙述，真正吃到缓存复用（而非仅靠 Embedding 相似度碰运气）。
 - **缓存命中短路，但绝不短路 Layer 5**：命中路径跳过 Layer 4，直接把"隔离前 SQL"交给 Layer 5 按当前用户重注隔离。这是本项目**自建**的能力（SQLBot 只有 few-shot 辅助生成，没有"命中即复用"的短路）。
 - **术语归一化分硬 / 软双通道**：关键实体（电站名 / 指标名）走**确定性字典**映射到标准 id；一般描述词走**软术语库**（同义词 + 定义，向量检索 + LLM 中介）。两路结果分别汇入 `resolved_entities` / `resolved_terms`，形态与 Layer 4 的 `PipelineInput` 对齐。
 - **身份只传不解析**：本层把 `CallerIdentity` 原样传给 Layer 5，**从不**在本层解析 org_ids/ps_ids，**从不**构造带权限过滤的 SQL。
@@ -43,7 +44,8 @@ Layer 3 是整个链路的"大脑与指挥棒"：它不实现 SQL 生成、不�
 | **查询编排（串联本层节点 + 委派下游）** | ✅ **Layer 3** | `QueryOrchestrator` |
 | **上下文改写 / 指代消解（多轮）** | ✅ **Layer 3** | `ContextRewriter`，基于 AgentCore Memory |
 | **术语归一化（硬 + 软）** | ✅ **Layer 3** | `TermNormalizer` = `HardEntityResolver` + `SoftGlossaryResolver` |
-| **语义复用缓存（lookup / store / 短路）** | ✅ **Layer 3** | `SemanticCache`，基于可插拔 `VectorStore` |
+| **规范化改写（变体 → 标准叙述）** | ✅ **Layer 3** | `CanonicalRewriter`，确定性替换 + LLM 结构规范化 + 兜底 |
+| **语义复用缓存（lookup / store / 短路）** | ✅ **Layer 3** | `SemanticCache`，基于可插拔 `VectorStore`；键为 `canonical_question` |
 | **组装最终答案 + 写回 Memory** | ✅ **Layer 3** | 编排器收尾 |
 | 认证 / 边缘限流 / 单用户业务限流 | ❌ **Layer 2（api-gateway）** | Layer 3 收到的已是"已认证请求" |
 | Legacy 路由 | ❌ **Layer 2 旁路（legacy-router）** | 与本层无关 |
@@ -142,25 +144,26 @@ graph TD
 graph TD
     START[收到已认证请求] --> REWRITE[① 上下文改写<br/>Memory 取最近N轮 → 独立问题]
     REWRITE --> NORM[② 术语归一化<br/>硬实体 + 软术语]
-    NORM --> LOOKUP[③ 语义缓存查找<br/>问题向量化 → 相似检索]
+    NORM --> CANON[③ 规范化改写<br/>确定性替换 + LLM规范化 + 兜底<br/>→ canonical_question]
+    CANON --> LOOKUP[④ 语义缓存查找<br/>canonical_question 向量化 → 相似检索]
     LOOKUP --> HIT{命中?<br/>相似度 ≥ 阈值}
 
     HIT -->|命中| PRESQL[取出隔离前 SQL 模板<br/>跳过 Layer 4]
-    HIT -->|未命中| L4[④ 调 Layer 4<br/>构造 PipelineInput → PipelineResult]
+    HIT -->|未命中| L4[⑤ 调 Layer 4<br/>构造 PipelineInput → PipelineResult]
 
     L4 --> L4OK{status = OK?}
     L4OK -->|否 NO_SQL/ERROR| FAIL[返回无答案/错误答案]
     L4OK -->|是| UNVSQL[得到未校验 SQL]
 
-    PRESQL --> GUARD[⑤ Layer 5 隔离守卫<br/>guard 按当前用户重注隔离 + 只读校验]
+    PRESQL --> GUARD[⑥ Layer 5 隔离守卫<br/>guard 按当前用户重注隔离 + 只读校验]
     UNVSQL --> GUARD
 
     GUARD --> GOK{ALLOWED?}
     GOK -->|REJECTED| FAIL
-    GOK -->|ALLOWED| EXEC[⑥ 执行安全 SQL<br/>Layer 6/7 DatasourceAdapter]
-    EXEC --> ANSWER[⑦ 组装答案 Answer]
-    ANSWER --> STORE[缓存 store<br/>仅未命中且执行成功时存隔离前SQL]
-    STORE --> WRITEMEM[⑧ 写回 Memory<br/>本轮问答]
+    GOK -->|ALLOWED| EXEC[⑦ 执行安全 SQL<br/>Layer 6/7 DatasourceAdapter]
+    EXEC --> ANSWER[⑧ 组装答案 Answer]
+    ANSWER --> STORE[缓存 store<br/>仅未命中且执行成功时存隔离前SQL<br/>键为 canonical_question]
+    STORE --> WRITEMEM[⑨ 写回 Memory<br/>本轮问答]
     WRITEMEM --> DONE[返回 Answer]
     FAIL --> WRITEMEM2[写回 Memory 可选] --> DONE
 ```
@@ -281,7 +284,29 @@ class SoftGlossaryResolver(Protocol):
     def resolve(self, question: str) -> tuple["ResolvedTerm", ...]: ...
 ```
 
-### 3.4 组件四：`SemanticCache`（语义复用缓存 · VectorStore 支撑）
+### 3.4 组件四：`CanonicalRewriter`（规范化改写 · 变体折叠）
+
+**职责**：在术语归一化之后、语义缓存查找之前，把措辞各异但意图相同的问题折叠为统一的 `canonical_question`，供缓存 store/lookup 与委派 Layer 4 统一使用，从而把"户用/家用/residential""1MW/一百万瓦/1000000w""倒序/降序/从大到小"等变体收拢到同一标准叙述、真正提升命中率。
+
+**三段算法（任一步失败逐级回退，最差回退 `standalone_question`）**：
+
+- **阶段A（确定性，无 LLM）**：`Deterministic_Term_Replacement` + `Unit_Normalization`。读软术语库登记的 `synonyms→标准词`，用 Aho-Corasick 精确匹配替换；再用规则把等价单位/数字写法归一（如 `1MW`/`一百万瓦`/`1000000瓦` → `1000000W`）。
+- **阶段B（LLM 结构规范化）**：`temperature=0` 调 LLM，把语序/口语/冗词折叠为标准叙述；提示词严格约束**不得改变**过滤条件、比较运算、阈值、单位、聚合维度、排序方向、输出字段等语义槽位；输出超过 `Rewrite_Max_Len` 或调用失败 → 回退阶段A 结果。
+- **阶段C（确定性兜底）**：对阶段B 产出再跑一次确定性替换，锁定标准词（防止 LLM 又把标准词改回同义词）。
+
+> **稳定性说明**：缓存匹配是**向量相似度 ≥ 阈值**（非字符串精确相等），故阶段B 的措辞轻微抖动可容忍——只要规范化把变体朝同一标准叙述收拢即可。阶段A/C 为确定性（Property 11）。
+
+**接口**：
+```python
+class CanonicalRewriter(Protocol):
+    def rewrite(self, ctx: "QueryContext") -> "QueryContext":
+        """以 ctx.standalone_question 为输入，写入 ctx.canonical_question。"""
+        ...
+```
+
+**职责边界**：只做叙述规范化，**不解析范围、不构造带权限过滤的 SQL**（Requirement 16.12）。
+
+### 3.5 组件五：`SemanticCache`（语义复用缓存 · VectorStore 支撑）
 
 **职责**：
 - `lookup`：把归一化后的问题向量化，在 `VectorStore` 做相似检索；相似度 ≥ 阈值（如 0.95）判为命中，返回存储的**隔离前 SQL 模板**。
@@ -297,7 +322,7 @@ class SemanticCache(Protocol):
                    entry_id: Optional[str] = None) -> int: ...
 ```
 
-### 3.5 注入的下游客户端接口
+### 3.6 注入的下游客户端接口
 
 ```python
 class MemoryClient(Protocol):
@@ -454,6 +479,8 @@ class QueryContext:
     standalone_question: Optional[str] = None                 # by ContextRewriter
     resolved_entities: tuple[ResolvedEntity, ...] = ()        # by TermNormalizer(硬)
     resolved_terms: tuple[ResolvedTerm, ...] = ()             # by TermNormalizer(软)
+    canonical_question: Optional[str] = None                  # by CanonicalRewriter（缓存键 + 传 L4）
+    semantic_slots: Optional[SemanticSlots] = None            # by CanonicalRewriter（缓存精确门禁）
     cache_lookup: Optional[CacheLookup] = None                # by SemanticCache.lookup
     pipeline_result: Optional["PipelineResult"] = None        # by Layer4Client（未命中）
     pre_isolation_sql: Optional[str] = None                   # 待送 Layer 5 的隔离前 SQL
@@ -495,7 +522,7 @@ class Answer:
 @dataclass(frozen=True)
 class PipelineInput:
     request_id: str                       # = ctx.request.request_id
-    standalone_question: str              # = ctx.standalone_question（已改写为独立问题）
+    standalone_question: str              # = ctx.canonical_question（规范化后的问题；其上游为改写后的独立问题）
     resolved_entities: tuple[ResolvedEntity, ...] = ()   # = ctx.resolved_entities（硬）
     resolved_terms: tuple[ResolvedTerm, ...] = ()        # = ctx.resolved_terms（软）
     datasource_id: str = "starrocks"      # = ctx.request.datasource_id
@@ -538,6 +565,81 @@ graph TD
 - 去重：同一 `surface` 若被硬通道命中为实体，则软通道对同一片段的术语可选择去重（避免重复注入），保守起见默认**都保留**（实体 id 与术语定义作用不同）。
 - 两路都**不阻断主流程**：任一路为空只是"少一些提示信息"，问题仍可继续走缓存 / Layer 4。
 
+### 5.3 规范化改写（Canonical Rewrite）设计
+
+规范化改写是本次为**提升缓存命中率**新增的节点，位于术语归一化之后、语义缓存查找之前。它与术语归一化的分工：**术语归一化产出结构化的 `resolved_entities/resolved_terms` 喂 Layer 4**（不改问题文本）；**规范化改写产出一段标准化的问题文本 `canonical_question`**，作为**缓存键**并**替代原问题传给 Layer 4**。
+
+#### 5.3.1 为什么需要它
+
+改造前缓存 lookup 嵌入的是 `standalone_question`（自然语言原句），命中率只由"嵌入模型语义相似度 + 0.95 阈值"决定；措辞改写的等价变体相似度普遍落在 0.69~0.94，几乎全部 miss。把变体先折叠为统一标准叙述，能让等价问法产生高度一致的嵌入，从而真正命中同一条缓存。
+
+#### 5.3.2 三段算法与回退
+
+```mermaid
+graph TD
+    IN[standalone_question] --> A[阶段A 确定性<br/>synonyms→标准词 Aho-Corasick 替换<br/>+ 单位/数字规则归一]
+    A --> B[阶段B LLM 结构规范化<br/>temperature=0，严格约束语义槽位]
+    B --> BCHK{输出超长 或 调用失败?}
+    BCHK -->|是| FB[回退：用阶段A 结果]
+    BCHK -->|否| BOK[用阶段B 结果]
+    FB --> C[阶段C 确定性兜底<br/>再跑一次 synonyms→标准词 替换]
+    BOK --> C
+    C --> OUT[canonical_question]
+    A -. 阶段A 也异常 .-> WORST[最差回退：standalone_question]
+    OUT -.空产出.-> WORST
+```
+
+- **阶段A（确定性替换 + 单位归一）**
+  - **数据来源**：软术语库登记的 `synonyms→标准词`（与软通道向量召回**同一份术语库、两种读法**：向量召回取定义喂 L4；规范化替换只取 `synonyms→标准词` 做精确替换）。由 knowledge-admin 维护。
+  - **匹配机制**：复用已实现的 Aho-Corasick 精确匹配（硬通道运行时匹配器同源思路），把命中的同义词替换为标准词；最长匹配优先、避免子串误替换。
+  - **枚举值同义词**（如"产品线"取值）：标准词=`户用`，`synonyms=[家用, 家庭户用, residential, ...]`，即登记在术语库中（见 Requirement 16.3 与架构决策：枚举值同义词走软通道建模）。
+  - **单位/数字归一（规则型，非同义词）**：`1MW`/`一百万瓦`/`1000000瓦`/`100万w` → `1000000W`；中文数字与量词（万/亿）换算；大小写与全半角统一。
+- **阶段B（LLM 结构规范化，temperature=0）**：折叠语序、口语、冗余修饰为标准叙述。提示词硬约束：**不得增删或改变**过滤条件、比较运算（`>`/`>=`/`<`/`=`）、阈值数值、单位、聚合维度（按电站/按机型）、聚合函数（SUM/AVG）、排序方向（DESC/ASC）、排序字段、输出字段集合。输出 > `Rewrite_Max_Len` 或调用异常 → 回退阶段A 结果并记 warning。
+- **阶段C（确定性兜底）**：对阶段B 产出再跑一次阶段A 的确定性替换，锁定标准词（防 LLM 把标准词又改回同义表述）。
+
+#### 5.3.3 正确性要点
+
+- **确定性（Property 11）**：阶段A/C 在术语库与单位规则不变时对同一输入产出一致；随机性只可能来自阶段B 的 LLM，且被"向量相似度阈值"容忍、被阶段C 收敛。
+- **产物一致使用（Property 12）**：缓存 lookup/store 的键与传 Layer 4 的问题**恒为 `canonical_question`**。
+- **永不抛断（Property 13）**：任一阶段失败逐级回退，最差回退 `standalone_question`，主流程不中断。
+- **层边界不变**：本节点不接触 org_ids/ps_ids，不构造带权限过滤的 SQL。
+
+### 5.4 语义槽位指纹（Semantic Slots）与缓存精确门禁
+
+**动机（实测）**：规范化改写把相似度整体抬高（正例 ~0.90–0.98），但**嵌入相似度无法区分关键语义槽位**：仅差“升序/降序”的反例 N5 余弦达 0.94–0.997，高于多数正例；更换嵌入模型（Cohere multilingual v3）也不解决（N5 仍高于全部正例）。结论：**向量相似度只能负责“召回候选”，不能负责“判等价”**。因此在缓存命中判定上增加**结构化槽位指纹**作为精确门禁。
+
+**分工**：向量相似度 = 召回（可放宽阈值提召回）；Semantic_Slots 全等 = 门禁（拒误命中）。
+
+**SemanticSlots 结构**（确定性归一后）：
+
+```python
+@dataclass(frozen=True)
+class SemanticSlots:
+    comparison: Optional[str] = None        # GT/GE/LT/LE/EQ
+    threshold_watts: Optional[int] = None   # 阈值归一为瓦的整数（仅当指标为功率类）
+    metric: Optional[str] = None            # 标准指标词，如 装机容量 / 发电量
+    group_by: Optional[str] = None          # 聚合维度：电站 / 机型 / 单台 / none
+    agg_func: Optional[str] = None          # SUM/AVG/MAX/MIN/COUNT/NONE
+    sort_direction: Optional[str] = None    # DESC/ASC
+    sort_field: Optional[str] = None        # 标准排序字段
+    output_entity: Optional[str] = None     # 输出主体：电站 / 机型
+    product_line: tuple[str, ...] = ()      # 产品线取值集合（户用 / 工商业 …；OR 用多元素）
+    top_n: Optional[int] = None             # TopN；无则 None
+    extra_filters: tuple[str, ...] = ()     # 归一后的附加过滤签名（如 build_year=2025）
+```
+
+**产出方式（与规范化改写合并为一次 LLM 调用，控延迟）**：阶段B 的 LLM 以 `temperature=0` **同时**返回 `{"canonical": "...", "slots": {...}}`（结构化 JSON）。随后对 slots 做**确定性归一**：单位→瓦整数（复用 `UnitNormalizer` 思路）、方向/运算/聚合→枚举、术语→标准词（复用 `TermReplacer`/术语库）。
+
+**规则型确定性抽取（降低对 LLM 温度/确定性的依赖）**：`comparison`、`threshold_watts`、`sort_direction`、`top_n` 这四个**最具判别性**的槽位，改由**规则**（正则/关键词）从确定性归一文本（stage_a）抽取并**覆盖** LLM 值（规则未命中时才回退 LLM 值）。这四个字段恰好区分了最危险的反例（比较符 N1/N2/N16/N17、单位量级 N10、排序方向 N5、TopN N6），规则化后它们**完全不依赖 LLM 温度与逐次抖动**，跨"入库/查询"稳定一致。
+
+**抽取模型独立可配置**：槽位抽取所用 LLM 模型经 `SLOT_EXTRACTION_MODEL_ID`（`AwsSettings.slot_extraction_model_id` → `EngineDependencies.canonical_model_id`）独立于主生成模型配置，应选支持 `temperature=0` 的模型（如 Sonnet 4.6）。**背景**：Opus 5 / Sonnet 5 等新型模型已取消 `temperature`，以其做抽取会非确定性、破坏"入库槽位=查询槽位"的前提而拉低召回（不影响精确率）。故抽取器专用、可钉温度，与主模型演进解耦。`BedrockLlmClient` 遇模型拒绝 `temperature` 时自动去参重试。
+
+**Fail-safe（关键）**：
+- JSON 解析失败 / 字段缺失 → `semantic_slots = None`；canonical 仍按三段回退产出（不中断）。
+- 缓存判命中要求 **两侧 slots 均非空且关键槽位全等**；**任一侧为空或任一关键槽位不等 → 判未命中**。宁可漏命中（走 L4，正确但不降本），绝不误命中（复用错误 SQL）。
+
+**关键槽位集合**（全等方命中）：`comparison, threshold_watts, metric, group_by, agg_func, sort_direction, sort_field, output_entity, product_line, top_n, extra_filters`。这组槽位可区分全部 18 条困难反例（比较符/阈值单位/指标/聚合维度/聚合函数/排序方向/排序字段/输出主体/产品线/TopN/时间过滤）。
+
 ---
 
 ## 6. 语义缓存设计（Semantic Reuse Cache）
@@ -570,7 +672,9 @@ sequenceDiagram
     end
 ```
 
-- **键**：归一化问题的 embedding（用归一化后的 `standalone_question`，命中率更稳定）。
+- **键**：`canonical_question` 的 embedding（规范化改写产物；变体折叠到统一标准叙述后命中率显著更高）。
+- **命中判定 = 向量召回 + 槽位门禁（Slot_Gate）**：向量检索取 `top_k`（默认 5）候选，筛出相似度 ≥ 阈值者，**逐个比对 Semantic_Slots**，返回第一个关键槽位全等的候选为命中；无一全等 → 未命中。任一侧 slots 为空 → 未命中（fail-safe）。store 时把 slots 序列化（`slots_json`）写入缓存条目一并落库。
+- **阈值取舍（已定稿）**：有了槽位门禁兜底，向量阈值放宽到 **0.85**（`CACHE_SIMILARITY_THRESHOLD`）以提升召回；门禁保证精确率与阈值无关，故低阈值不放大误命中。实测（Sonnet 4.6 + 阈值 0.85 + 门禁）正例召回 ≈14/18、误命中 0/18。
 - **阈值**：默认 `0.95`（可配置）。低于阈值视为未命中，走 Layer 4。
 - **命名空间**：`semantic_cache`，与软术语库（软归一化用）分开命名空间，互不干扰。
 
@@ -648,11 +752,11 @@ Memory 读取失败 → 记 `ctx.memory_degraded = True`，**降级为无上下�
 
 **Validates: Requirements 7.1, 7.2**
 
-### Property 3: Layer 4 收到独立问题（Pipeline Receives Standalone Question）
-对任意进入 Layer 4 的请求，`PipelineInput.standalone_question` 必然是经上下文改写后的自包含问题（无未消解的指代 / 省略依赖）。
-`∀ PipelineInput p: p.standalone_question == ctx.standalone_question ∧ standalone_question 已改写`
+### Property 3: Layer 4 收到规范化的独立问题（Pipeline Receives Canonical Question）
+对任意进入 Layer 4 的请求，`PipelineInput` 承载的问题必然是规范化产物 `canonical_question`（其上游为经上下文改写后自包含、无未消解指代 / 省略的 `standalone_question`）。
+`∀ PipelineInput p: p.question == ctx.canonical_question ∧ canonical_question 派生自已改写的 standalone_question`
 
-**Validates: Requirements 2.2, 2.3, 8.1**
+**Validates: Requirements 2.2, 2.3, 8.1, 16.11**
 
 ### Property 4: Layer 3 从不注入隔离 / 不解析范围（No Isolation, No Scope in L3）
 Layer 3 构造的 `PipelineInput` 与传入 Layer 5 的 SQL **都不含** `org_id/ps_id` 权限过滤；Layer 3 从不调用权限解析、从不构造带范围的 SQL。身份仅**原样透传**给 Layer 5。
@@ -667,7 +771,7 @@ Layer 3 构造的 `PipelineInput` 与传入 Layer 5 的 SQL **都不含** `org_i
 **Validates: Requirements 3.2**
 
 ### Property 6: 编排顺序固定（Fixed Orchestration Order）
-编排器始终按 `context_rewrite → term_normalization → semantic_cache →（命中: L5 | 未命中: L4 → L5）→ execute → write_memory` 执行；两条分支必然汇聚于 Layer 5 之后才可能执行。
+编排器始终按 `context_rewrite → term_normalization → canonical_rewrite → semantic_cache →（命中: L5 | 未命中: L4 → L5）→ execute → write_memory` 执行；两条分支必然汇聚于 Layer 5 之后才可能执行。
 `∀ 执行: 节点序列 = 固定序列（分支仅在 cache hit/miss，且都经 L5）`
 
 **Validates: Requirements 1.1, 1.2, 1.3, 1.4**
@@ -694,6 +798,42 @@ Layer 3 构造的 `PipelineInput` 与传入 Layer 5 的 SQL **都不含** `org_i
 `Answer.status` 与实际结果一致：`OK ⟺ 有成功执行的结果行`；`NO_SQL ⟺ Layer 4 无法生成`；`REJECTED ⟺ Layer 5 拒绝`；`UPSTREAM_ERROR ⟺ Layer 4/执行层错误`。
 
 **Validates: Requirements 8.4, 8.5, 9.2, 9.3, 11.2, 11.4**
+
+### Property 11: 规范化确定性阶段可复现（Deterministic Canonical Stages）
+规范化改写的阶段A / 阶段C 在术语库与单位规则不变时，对同一 `standalone_question` 恒定产出相同替换结果（不依赖 LLM、不引入随机性）。
+`∀ 输入 s: stageA(s) == stageA(s) ∧ stageC(x) == stageC(x)`
+
+**Validates: Requirements 16.3, 16.4, 16.13**
+
+### Property 12: 规范化产物一致使用（Canonical Question Used Consistently）
+语义缓存 lookup / store 的键与传入 Layer 4 的问题**恒为** `canonical_question`，不使用 `standalone_question`。
+`∀ 请求: cache_key == ctx.canonical_question ∧ pipeline_input.question == ctx.canonical_question`
+
+**Validates: Requirements 16.9, 16.10, 16.11**
+
+### Property 13: 规范化改写永不抛断（Canonical Rewrite Never Breaks Flow）
+规范化改写任一阶段失败都逐级回退，最差回退到 `standalone_question`；节点恒产出非空 `canonical_question` 且不使主流程中断。
+`∀ 请求: ctx.canonical_question 非空 ∧ 规范化异常 ⟹ 已回退`
+
+**Validates: Requirements 16.6, 16.7, 16.8**
+
+### Property 14: 槽位门禁拒误命中（Slot Gate Rejects Mismatch）
+即便向量相似度 ≥ 阈值，只要请求与候选的关键槽位存在不等，就判未命中。
+`∀ 候选 c: (sim(c) ≥ 阈值) ∧ (slots(req) ≠ slots(c) 于任一关键槽位) ⟹ ¬hit(c)`
+
+**Validates: Requirements 17.5, 17.6, 17.7**
+
+### Property 15: 槽位缺失即 fail-safe（Missing Slots ⟹ Miss）
+请求或候选任一侧 Semantic_Slots 为空，则判未命中。
+`∀ 请求: (slots(req) = ∅ ∨ slots(c) = ∅) ⟹ ¬hit(c)`
+
+**Validates: Requirements 17.3, 17.6**
+
+### Property 16: 命中蕴含槽位全等（Hit ⟹ Slots Equal）
+凡判命中的候选，其关键槽位与请求全等且向量相似度 ≥ 阈值。
+`∀ 候选 c: hit(c) ⟹ (slots(req) = slots(c) 于全部关键槽位) ∧ sim(c) ≥ 阈值`
+
+**Validates: Requirements 17.5, 17.7**
 
 ---
 
@@ -727,6 +867,12 @@ class EntityDictionary(Protocol):
     def lookup(self, surface: str) -> Optional[ResolvedEntity]: ...
     def extract_candidates(self, question: str) -> list[str]: ...   # 从问题切出候选实体表述
 
+class TermReplacer(Protocol):
+    """规范化改写的确定性替换源：读软术语库登记的 synonyms→标准词，
+    以 Aho-Corasick 精确匹配把变体词替换为标准词（确定性、无 LLM、无随机）。
+    数据源为术语库权威存储（DynamoDB knowledge_glossary，由 knowledge-admin 维护）。"""
+    def replace(self, text: str) -> str: ...
+
 # —— 下游客户端（见 §3.5）——
 # MemoryClient / Layer4Client / Layer5Guard / Layer5GuardFactory / DatasourceAdapter
 
@@ -738,6 +884,7 @@ class EngineDependencies:
     vector_store: VectorStore
     llm_client: LlmClient
     entity_dict: EntityDictionary
+    term_replacer: "TermReplacer"            # 规范化改写确定性替换源（synonyms→标准词）
     layer4: "Layer4Client"
     guard_factory: "Layer5GuardFactory"     # 按身份构造 Layer5Guard
     datasource: "DatasourceAdapter"
@@ -751,6 +898,10 @@ class EngineConfig:
     glossary_namespace: str = "glossary"
     glossary_top_k: int = 5
     rewrite_model_id: str = "anthropic.claude-3-5-haiku-20241022-v1:0"  # 改写用轻量模型
+    # —— 规范化改写（canonical_rewrite）——
+    canonical_llm_enabled: bool = True       # 阶段B 是否启用 LLM 结构规范化（可开关，便于降级/测试）
+    canonical_model_id: str = "anthropic.claude-3-5-haiku-20241022-v1:0"  # 规范化用轻量模型
+    rewrite_max_len: int = 200               # 阶段B 输出长度上限；超长回退阶段A（Rewrite_Max_Len）
 ```
 
 ### 8.2 编排器（`QueryOrchestrator`）—— 完整序列（含命中/未命中分支）
@@ -767,6 +918,7 @@ class DefaultQueryOrchestrator:
         # 组装本层节点（可注入替换实现）
         self._rewriter = ContextRewriterImpl(deps, config)
         self._normalizer = TermNormalizerImpl(deps, config)
+        self._canonical = CanonicalRewriterImpl(deps, config)
         self._cache = SemanticCacheImpl(deps, config)
 
     def handle(self, request: QueryRequest) -> Answer:
@@ -778,10 +930,13 @@ class DefaultQueryOrchestrator:
         # ② 术语归一化（硬 + 软）
         ctx = self._run_node("term_normalization", ctx, self._normalizer.normalize)
 
-        # ③ 语义缓存查找
+        # ③ 规范化改写（确定性替换 + LLM规范化 + 兜底 → canonical_question）
+        ctx = self._run_node("canonical_rewrite", ctx, self._canonical.rewrite)
+
+        # ④ 语义缓存查找（键 = canonical_question）
         ctx = self._run_node("semantic_cache_lookup", ctx, self._cache.lookup_into_ctx)
 
-        # ④ 分支：命中 → 短路 Layer 4；未命中 → 调 Layer 4
+        # ⑤ 分支：命中 → 短路 Layer 4；未命中 → 调 Layer 4
         if ctx.cache_lookup and ctx.cache_lookup.hit:
             ctx.pre_isolation_sql = ctx.cache_lookup.pre_isolation_sql
             ctx.sql_source = QuerySource.CACHE_HIT
@@ -792,7 +947,7 @@ class DefaultQueryOrchestrator:
             ctx.pre_isolation_sql = ctx.pipeline_result.unvalidated_sql
             ctx.sql_source = QuerySource.PIPELINE
 
-        # ⑤ Layer 5 隔离守卫（两条分支在此汇聚；按当前用户重注隔离 + 只读校验）
+        # ⑥ Layer 5 隔离守卫（两条分支在此汇聚；按当前用户重注隔离 + 只读校验）
         guard = self._deps.guard_factory.for_identity(ctx.request.identity)   # 只传身份
         ctx = self._run_node(
             "isolation_guard", ctx,
@@ -802,21 +957,21 @@ class DefaultQueryOrchestrator:
             self._write_memory_safe(ctx, answer)                 # 可选写回失败轮
             return answer
 
-        # ⑥ 执行安全 SQL（Layer 6/7）
+        # ⑦ 执行安全 SQL（Layer 6/7）
         ctx = self._run_node("execute", ctx, self._execute_safe_sql)
         if ctx.result_set is None:
             answer = self._answer_upstream_error(ctx, "执行失败")
             self._write_memory_safe(ctx, answer)
             return answer
 
-        # ⑦ 组装答案
+        # ⑧ 组装答案
         answer = self._assemble_answer(ctx)
 
         # 缓存 store：仅"未命中 ∧ 通过 ∧ 执行成功"三条件（Property 9）
         if ctx.sql_source == QuerySource.PIPELINE:
             self._cache.store_if_eligible(ctx)
 
-        # ⑧ 写回 Memory（本轮问答）
+        # ⑨ 写回 Memory（本轮问答）
         self._write_memory_safe(ctx, answer)
         return answer
 
@@ -824,7 +979,7 @@ class DefaultQueryOrchestrator:
     def _invoke_layer4(self, ctx: QueryContext) -> QueryContext:
         pi = PipelineInput(
             request_id=ctx.request.request_id,
-            standalone_question=ctx.standalone_question,     # 已是独立问题（Property 3）
+            standalone_question=ctx.canonical_question,      # 规范化产物（Property 3/12）
             resolved_entities=ctx.resolved_entities,          # 硬
             resolved_terms=ctx.resolved_terms,                # 软
             datasource_id=ctx.request.datasource_id,
@@ -993,7 +1148,85 @@ class TermNormalizerImpl:
         return ctx
 ```
 
-### 8.5 语义缓存节点（`SemanticCacheImpl`）—— lookup / store / invalidate
+### 8.5 规范化改写节点（`CanonicalRewriterImpl`）—— 三段算法 + 逐级回退
+
+```python
+_CANON_SYSTEM_PROMPT = (
+    "你是问题规范化助手。把用户问题改写为一个标准、简洁的自然语言问句，"
+    "只做叙述层面的规范化。严禁改变以下任何语义：过滤条件、比较运算(>/>=/</=)、"
+    "阈值数值、单位、聚合维度(按电站/按机型)、聚合函数(总计/平均)、排序方向(升序/降序)、"
+    "排序字段、输出字段集合。只输出规范化后的问句，不要解释。")
+
+
+def _canon_prompt(text: str) -> str:
+    return f"待规范化问题：\n{text}\n\n规范化后的问题："
+
+
+class UnitNormalizer:
+    """规则型单位/数字归一（纯函数，确定性，无外部依赖）。
+    例：1MW / 一百万瓦 / 1000000瓦 / 100万w → 1000000W；中文数字与量词换算；大小写/全半角统一。"""
+    def normalize(self, text: str) -> str: ...
+
+
+class CanonicalRewriterImpl:
+    """阶段A 确定性替换+单位归一 → 阶段B LLM 规范化 → 阶段C 确定性兜底。
+    任一阶段失败逐级回退，最差回退 standalone_question（Property 11/12/13）。"""
+
+    def __init__(self, deps: EngineDependencies, config: EngineConfig) -> None:
+        self._llm = deps.llm_client
+        self._replacer = deps.term_replacer      # synonyms→标准词，Aho-Corasick（确定性）
+        self._units = UnitNormalizer()           # 规则型单位/数字归一（确定性）
+        self._config = config
+
+    def rewrite(self, ctx: QueryContext) -> QueryContext:
+        base = ctx.standalone_question or ctx.request.raw_question
+        # 阶段A：确定性替换 + 单位归一（Property 11）
+        stage_a = self._units.normalize(self._replacer.replace(base))
+        result = stage_a
+        # 阶段B：LLM 结构规范化（可开关；失败/超长回退阶段A）
+        if self._config.canonical_llm_enabled:
+            try:
+                out = self._llm.complete(
+                    model_id=self._config.canonical_model_id,
+                    system=_CANON_SYSTEM_PROMPT, prompt=_canon_prompt(stage_a),
+                    max_tokens=self._config.rewrite_max_len, temperature=0.0).strip()
+                if out and len(out) <= self._config.rewrite_max_len:
+                    result = out
+                else:
+                    ctx.warnings.append("规范化改写：LLM 输出超长/为空，回退阶段A")
+            except Exception as e:
+                ctx.warnings.append(f"规范化改写：LLM 失败回退阶段A：{e!r}")
+        # 阶段C：确定性兜底，锁定标准词（Property 11）
+        result = self._units.normalize(self._replacer.replace(result))
+        # 最差回退：确保非空（Property 13）
+        ctx.canonical_question = result or base
+        return ctx
+```
+
+**槽位产出（§5.4）**：阶段B 的 LLM 调用改为结构化输出 `{"canonical", "slots"}`；解析成功则对 `slots` 做确定性归一（单位→瓦、方向/运算/聚合→枚举、术语→标准词）得到 `SemanticSlots` 写入 `ctx.semantic_slots`；解析失败 → `ctx.semantic_slots = None`（fail-safe），canonical 仍走三段回退。归一的确定性部分（单位/枚举/术语）满足可复现。
+
+### 8.6 语义缓存节点（`SemanticCacheImpl`）—— lookup（向量召回 + 槽位门禁）/ store / invalidate
+
+**store**：`payload` 除 `pre_isolation_sql`、`question(=canonical)` 外，增加 `slots_json`（`SemanticSlots` 序列化）。
+
+**lookup（Slot_Gate）**：
+```python
+def lookup(self, question: str, slots: Optional[SemanticSlots]) -> CacheLookup:
+    if self._embedder is None or self._vs is None or slots is None:
+        return CacheLookup(hit=False)                 # 无 slots → fail-safe 未命中（Property 15）
+    vec = self._embedder.embed([question])[0]
+    hits = self._vs.similarity_search(vec, self._top_k, CACHE_NAMESPACE)   # top_k≥1
+    for top in hits:
+        sim = float(top.get("similarity", top.get("score", 0.0)))
+        if sim < self._threshold:
+            continue
+        cand = SemanticSlots.from_json(top.get("slots_json"))
+        if cand is not None and slots_equal(slots, cand):   # 关键槽位全等（Property 14/16）
+            return CacheLookup(hit=True, pre_isolation_sql=top.get("pre_isolation_sql"),
+                               similarity=sim, entry_id=top.get("entry_id"))
+    return CacheLookup(hit=False)
+```
+`slots_equal` 比较全部关键槽位（§5.4）；任一不等即视为不同问题。命中仍照旧过 Layer 5（两条红线不变）。
 
 ```python
 import uuid
@@ -1011,7 +1244,7 @@ class SemanticCacheImpl:
 
     def lookup(self, ctx: QueryContext) -> CacheLookup:
         try:
-            vec = self._embedder.embed([ctx.standalone_question])[0]
+            vec = self._embedder.embed([ctx.canonical_question])[0]   # 键 = canonical_question
             hits = self._vs.similarity_search(vec, top_k=1, namespace=self._ns)
         except Exception as e:
             ctx.warnings.append(f"缓存查找失败，按未命中处理: {e!r}")
@@ -1038,11 +1271,11 @@ class SemanticCacheImpl:
         if not eligible:
             return
         pre_isolation_sql = ctx.pipeline_result.unvalidated_sql   # ★隔离前，绝非 safe_sql
-        vec = self._embedder.embed([ctx.standalone_question])[0]
+        vec = self._embedder.embed([ctx.canonical_question])[0]   # 键 = canonical_question
         self._vs.upsert(
             namespace=self._ns, doc_id=str(uuid.uuid4()), vector=vec,
             payload={
-                "normalized_question": ctx.standalone_question,
+                "normalized_question": ctx.canonical_question,
                 "pre_isolation_sql": pre_isolation_sql,          # 唯一被缓存的 SQL
                 "datasource_id": ctx.request.datasource_id,
                 "created_at": time.time(),
@@ -1050,9 +1283,9 @@ class SemanticCacheImpl:
 
     def store(self, ctx: QueryContext, pre_isolation_sql: str) -> None:
         # 供显式调用；生产路径统一走 store_if_eligible
-        vec = self._embedder.embed([ctx.standalone_question])[0]
+        vec = self._embedder.embed([ctx.canonical_question])[0]   # 键 = canonical_question
         self._vs.upsert(namespace=self._ns, doc_id=str(uuid.uuid4()), vector=vec,
-                        payload={"normalized_question": ctx.standalone_question,
+                        payload={"normalized_question": ctx.canonical_question,
                                  "pre_isolation_sql": pre_isolation_sql,
                                  "datasource_id": ctx.request.datasource_id,
                                  "created_at": time.time()})
@@ -1066,7 +1299,7 @@ class SemanticCacheImpl:
         return 0
 ```
 
-### 8.6 组装入口（依赖注入 + 每请求构造 Guard）
+### 8.7 组装入口（依赖注入 + 每请求构造 Guard）
 
 ```python
 def build_orchestrator(deps: EngineDependencies,
@@ -1141,6 +1374,10 @@ def _narrate(rows: "ResultSet") -> str: ...           # 结果行 → 自然语�
   - **硬归一化确定性**：同输入多次调用结果一致（Property 5）。
   - **Memory 降级**：mock Memory 抛错 → 断言 `standalone_question == raw_question` 且主流程继续。
   - **身份透传**：断言 `guard_factory.for_identity` 收到的 identity 逐字段等于请求 identity（Property 7）。
+  - **规范化确定性**：mock `TermReplacer` + `UnitNormalizer`，禁用/固定阶段B → 断言阶段A/C 同输入同输出（Property 11）。
+  - **规范化产物一致使用**：断言缓存 lookup/store 的 embed 入参与 `PipelineInput` 的问题都等于 `ctx.canonical_question`（Property 12）。
+  - **规范化回退**：mock LLM 抛错 / 返回超长 → 断言回退阶段A；全阶段失败 → 断言回退 `standalone_question` 且主流程继续（Property 13）。
+  - **语义槽位保持**：对 `eval/cache_recall/` 正例断言规范化后关键槽位（比较运算/阈值/单位/聚合维度/排序方向/输出字段）不变；对反例断言槽位差异被保留（不被折叠成正例）。
 
 ### 10.4 权衡（Tradeoffs）
 
@@ -1161,6 +1398,7 @@ def _narrate(rows: "ResultSet") -> str: ...           # 结果行 → 自然语�
 | `Embedder` | 文本 → 向量 | **Bedrock / Cohere** | 与 Layer 4 共用抽象 |
 | `LlmClient` | 上下文改写 | **Bedrock Claude（Haiku）** | 改写用轻量模型控成本 |
 | `EntityDictionary` | 硬归一化字典 | **DynamoDB** | 关键实体 → 标准 id，确定性 |
+| `TermReplacer` | 规范化改写确定性替换源 | **DynamoDB `knowledge_glossary` + Aho-Corasick** | synonyms→标准词，确定性、无 LLM；与软通道同一份术语库 |
 | `Layer4Client` | Text-to-SQL 生成 | **text2sql-pipeline** | 缓存未命中时委派；`PipelineInput`/`PipelineResult` 契约 |
 | `Layer5GuardFactory` / `Layer5Guard` | 隔离注入 + 只读校验 | **isolation-guard** | 每请求按 identity 构造；`guard(sql, request_id)` |
 | `DatasourceAdapter` | 执行安全 SQL | **StarRocks（只读，经 ProxySQL）** | Layer 6/7；只读账号第二道防线 |

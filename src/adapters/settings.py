@@ -28,6 +28,8 @@ class AwsSettings:
     ddb_table: str
     user_rate_limit: int
     memory_id: str
+    # 槽位抽取专用模型（独立于主 LLM；应选支持 temperature=0 的模型以保证抽取确定性）
+    slot_extraction_model_id: str = "us.anthropic.claude-sonnet-4-6"
     # —— knowledge-admin 知识表 ——
     glossary_table: str = "knowledge_glossary"
     glossary_name_table: str = "knowledge_glossary_name"
@@ -47,6 +49,8 @@ class AwsSettings:
             ddb_table=_env("SMARTQUERY_DDB_TABLE", "api_gateway_rate_limit"),
             user_rate_limit=int(_env("SMARTQUERY_USER_RATE_LIMIT", "200")),
             memory_id=_env("SMARTQUERY_MEMORY_ID", ""),
+            slot_extraction_model_id=_env("SMARTQUERY_SLOT_MODEL_ID",
+                                          "us.anthropic.claude-sonnet-4-6"),
             glossary_table=_env("SMARTQUERY_GLOSSARY_TABLE", "knowledge_glossary"),
             glossary_name_table=_env("SMARTQUERY_GLOSSARY_NAME_TABLE", "knowledge_glossary_name"),
             entity_table=_env("SMARTQUERY_ENTITY_TABLE", "knowledge_entity"),
