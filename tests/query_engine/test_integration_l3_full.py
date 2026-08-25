@@ -14,7 +14,7 @@ from text2sql_pipeline.models import PipelineConfig, PipelineInput
 from text2sql_pipeline.orchestrator import build_orchestrator
 
 # 被测 L3
-from query_engine.deps import EngineDependencies, Layer4Request
+from query_engine.deps import EngineDependencies, SqlGeneratorRequest
 from query_engine.models import AnswerStatus, CallerIdentity, QueryRequest, QuerySource
 from query_engine.orchestrator import QueryOrchestrator
 
@@ -53,11 +53,11 @@ class _L4Datasource:
 
 
 # ---- L3 侧适配器：把真实 L4/L5 适配到 L3 的 Protocol ----
-class RealLayer4Adapter:
+class RealSqlGeneratorAdapter:
     def __init__(self, orchestrator):
         self._o = orchestrator
 
-    def generate(self, request: Layer4Request):
+    def generate(self, request: SqlGeneratorRequest):
         from text2sql_pipeline.models import ResolvedEntity as E, ResolvedTerm as T
         pi = PipelineInput(
             request_id=request.request_id,
@@ -67,7 +67,7 @@ class RealLayer4Adapter:
             datasource_id=request.datasource_id,
             model_id=request.model_id,
         )
-        return self._o.run(pi)  # PipelineResult 满足 Layer4Result 鸭子类型
+        return self._o.run(pi)  # PipelineResult 满足 SqlGeneratorResult 鸭子类型
 
 
 class RealGuardFactoryAdapter:
@@ -92,7 +92,7 @@ def _build_l3(l4_sql: str) -> EngineDependencies:
         embedder=None,                # L3 缓存/术语本用例不启用（None → 缓存未命中、软术语空）
         vector_store=None,
         entity_dictionary=FakeEntityDictionary(),
-        layer4=RealLayer4Adapter(l4_orch),
+        sql_generator=RealSqlGeneratorAdapter(l4_orch),
         guard_factory=RealGuardFactoryAdapter(iso_factory),
         datasource=None,
     )

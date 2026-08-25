@@ -48,7 +48,7 @@ class TermReplacer(Protocol):
 
 # ---------- 下游层客户端 ----------
 @dataclass(frozen=True)
-class Layer4Request:
+class SqlGeneratorRequest:
     request_id: str
     standalone_question: str
     resolved_entities: tuple[ResolvedEntity, ...] = ()
@@ -57,25 +57,25 @@ class Layer4Request:
     model_id: Optional[str] = None
 
 
-class Layer4Result(Protocol):
-    """Layer 4 产出（鸭子类型；真实 PipelineResult 亦满足）。status 与 'ok'/'no_sql' 等可比。"""
+class SqlGeneratorResult(Protocol):
+    """sql-generator 产出（鸭子类型；真实 PipelineResult 亦满足）。status 与 'ok'/'no_sql' 等可比。"""
 
     status: Any
     unvalidated_sql: Optional[str]
 
 
-class Layer4Client(Protocol):
-    def generate(self, request: Layer4Request) -> Layer4Result: ...
+class SqlGeneratorClient(Protocol):
+    def generate(self, request: SqlGeneratorRequest) -> SqlGeneratorResult: ...
 
 
-class Layer5Guard(Protocol):
-    """Layer 5 门面（鸭子类型；真实 IsolationGuard 亦满足）。"""
+class SecurityGuard(Protocol):
+    """security-guard 门面（鸭子类型；真实 IsolationGuard 亦满足）。"""
 
     def guard(self, sql: str, request_id: str) -> Any: ...
 
 
-class Layer5GuardFactory(Protocol):
-    def for_identity(self, identity: CallerIdentity) -> Layer5Guard: ...
+class SecurityGuardFactory(Protocol):
+    def for_identity(self, identity: CallerIdentity) -> SecurityGuard: ...
 
 
 class DatasourceAdapter(Protocol):
@@ -96,6 +96,6 @@ class EngineDependencies:
     entity_dictionary: Optional[EntityDictionary] = None
     term_replacer: Optional[TermReplacer] = None   # 规范化改写确定性替换源（synonyms→标准词）
     canonical_model_id: Optional[str] = None       # 槽位抽取专用模型（独立于主生成模型；None=用默认）
-    layer4: Optional[Layer4Client] = None
-    guard_factory: Optional[Layer5GuardFactory] = None
+    sql_generator: Optional[SqlGeneratorClient] = None
+    guard_factory: Optional[SecurityGuardFactory] = None
     datasource: Optional[DatasourceAdapter] = None  # 本期可为 None（不执行）

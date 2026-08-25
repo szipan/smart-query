@@ -15,7 +15,7 @@ from typing import Any, Iterator, Optional
 
 from api_gateway.clients import EngineClient, LegacyClient
 from api_gateway.envelope import ErrorEnvelope, GatewayResponse, QueryResponse, parse_query_request
-from api_gateway.errors import Layer2Error, RateLimitExceeded
+from api_gateway.errors import GatewayError, RateLimitExceeded
 from api_gateway.identity import build_identity
 from api_gateway.observer import GatewayObserver, NullGatewayObserver, mask_user_id
 from api_gateway.ratelimit import RateLimiter
@@ -88,7 +88,7 @@ class ThinLambda:
             # 步骤4+5：请求整形 + 身份透传 + 调下游
             if route.target == RouteTarget.LEGACY:
                 if self._deps.legacy_client is None:
-                    raise Layer2Error("legacy 路由未配置")
+                    raise GatewayError("legacy 路由未配置")
                 raw = self._deps.legacy_client.invoke(query, identity, route.rule_id or "")
                 source = "legacy"
             else:
@@ -104,7 +104,7 @@ class ThinLambda:
         except RateLimitExceeded as e:
             return self._error(request_id, e, retry_after=e.retry_after,
                                headers={"Retry-After": str(e.retry_after)})
-        except Layer2Error as e:
+        except GatewayError as e:
             return self._error(request_id, e)
         except Exception as e:  # fail-closed 兜底，不泄露内部细节
             self._log("unhandled", request_id, {"err_type": type(e).__name__})
@@ -114,7 +114,7 @@ class ThinLambda:
     def _request_id(self, req: GatewayRequest) -> str:
         return req.request_id or (req.headers or {}).get("X-Request-Id") or str(uuid.uuid4())
 
-    def _error(self, request_id: str, e: Layer2Error, retry_after: Optional[int] = None,
+    def _error(self, request_id: str, e: GatewayError, retry_after: Optional[int] = None,
                headers: Optional[dict] = None) -> GatewayResponse:
         # 面向客户端的 message 不泄露内部实现细节
         env = ErrorEnvelope(code=e.code, message=_safe_message(e.code), request_id=request_id,

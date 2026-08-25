@@ -1,24 +1,24 @@
-"""Layer 2 异常层次。每类对应一个错误信封 code 与 HTTP 状态码。"""
+"""api-gateway 异常层次。每类对应一个错误信封 code 与 HTTP 状态码。"""
 
 
-class Layer2Error(Exception):
+class GatewayError(Exception):
     """基类。"""
 
     code = "DOWNSTREAM_ERROR"
     http_status = 502
 
 
-class BadRequest(Layer2Error):
+class BadRequest(GatewayError):
     code = "BAD_REQUEST"
     http_status = 400
 
 
-class Unauthorized(Layer2Error):
+class Unauthorized(GatewayError):
     code = "UNAUTHORIZED"
     http_status = 401
 
 
-class RateLimitExceeded(Layer2Error):
+class RateLimitExceeded(GatewayError):
     code = "RATE_LIMITED"
     http_status = 429
 
@@ -27,7 +27,7 @@ class RateLimitExceeded(Layer2Error):
         super().__init__(f"rate limited, retry after {retry_after}s")
 
 
-class DownstreamError(Layer2Error):
+class DownstreamError(GatewayError):
     code = "DOWNSTREAM_ERROR"
 
     def __init__(self, message: str = "downstream error", http_status: int = 502) -> None:

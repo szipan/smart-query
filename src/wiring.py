@@ -1,11 +1,11 @@
-"""真实依赖组装（wiring）：把 Bedrock / OpenSearch / DynamoDB 适配器接到四层核心。
+"""真实依赖组装（wiring）：把 Bedrock / OpenSearch / DynamoDB 适配器接到各核心组件。
 
 不改动任何一层的核心逻辑，只在此处：
 1. 用环境变量（AwsSettings）构造真实能力实现；
 2. 复用集成测试已验证的跨层适配思路（clean-room，生产版）：
-   - RealLayer4Adapter：L3 的 Layer4Client -> 真实 L4 PipelineOrchestrator。
-   - RealGuardFactoryAdapter：L3 的 Layer5GuardFactory -> 真实 L5 IsolationGuardFactory。
-   - L3EngineClient：L2 的 EngineClient -> 真实 L3 QueryOrchestrator。
+   - RealSqlGeneratorAdapter：engine 的 SqlGeneratorClient -> 真实 text2sql PipelineOrchestrator。
+   - RealGuardFactoryAdapter：engine 的 SecurityGuardFactory -> 真实 IsolationGuardFactory。
+   - GatewayEngineClient：gateway 的 EngineClient -> 真实 QueryOrchestrator。
 3. 模型切换：把 settings.llm_model_id 注入每个请求的 model_id（单一切换点）。
 """
 
@@ -23,18 +23,18 @@ from adapters.settings import AwsSettings
 
 _UNSET = object()   # 区分「未提供」与「显式 None（关闭硬通道）」
 
-# L2
+# gateway
 from api_gateway.errors import DownstreamError
 from api_gateway.handler import GatewayDependencies, ThinLambda
 from api_gateway.ratelimit import RateLimiter
 from api_gateway.router import RequestRouter, RuleRegistry
 
-# L3
-from query_engine.deps import EngineDependencies, Layer4Request
+# engine
+from query_engine.deps import EngineDependencies, SqlGeneratorRequest
 from query_engine.models import CallerIdentity as QeIdentity, QueryRequest as QeRequest
 from query_engine.orchestrator import QueryOrchestrator
 
-# L4
+# sql-generator
 from text2sql_pipeline.deps import StageDependencies
 from text2sql_pipeline.models import (
     PipelineConfig,
@@ -44,7 +44,7 @@ from text2sql_pipeline.models import (
 )
 from text2sql_pipeline.orchestrator import build_orchestrator
 
-# L5
+# security-guard
 from isolation_guard.guard import IsolationGuardFactory
 from isolation_guard.models import CallerIdentity as IsoIdentity
 from isolation_guard.sungrow_policy import sungrow_table_policy
@@ -69,7 +69,7 @@ class InMemoryMemory:
 
 
 class _StarrocksDialect:
-    """L4 只需要 datasource.dialect（RAG 走 vector_store，不查真实库）。"""
+    """sql-generator 只需要 datasource.dialect（RAG 走 vector_store，不查真实库）。"""
 
     dialect = "starrocks"
 
@@ -78,11 +78,11 @@ class _StarrocksDialect:
 
 
 # ---------- 跨层适配器（生产版） ----------
-class RealLayer4Adapter:
+class RealSqlGeneratorAdapter:
     def __init__(self, orchestrator) -> None:
         self._o = orchestrator
 
-    def generate(self, request: Layer4Request):
+    def generate(self, request: SqlGeneratorRequest):
         pi = PipelineInput(
             request_id=request.request_id,
             standalone_question=request.standalone_question,
@@ -107,8 +107,8 @@ class RealGuardFactoryAdapter:
         return self._f.for_identity(IsoIdentity(user_id=identity.user_id, claims=identity.claims))
 
 
-class L3EngineClient:
-    """L2 EngineClient：把网关请求转为 L3 请求并运行，注入默认 model_id。"""
+class GatewayEngineClient:
+    """gateway → engine 适配器：把网关请求转为 engine 请求并运行，注入默认 model_id。"""
 
     def __init__(self, orchestrator: QueryOrchestrator, default_model_id: str) -> None:
         self._o = orchestrator
@@ -181,8 +181,9 @@ def build_term_replacer(settings: AwsSettings, client: Any = None):
 
 
 def build_engine(settings: AwsSettings, *, embedder=None, vector_store=None, llm=None,
-                 memory=None, entity_dictionary=_UNSET, term_replacer=_UNSET) -> QueryOrchestrator:
-    """组装 L3 QueryOrchestrator（内部含真实 L4 与 L5）。
+                 memory=None, entity_dictionary=_UNSET, term_replacer=_UNSET,
+                 observer=None) -> QueryOrchestrator:
+    """组装 QueryOrchestrator（内部含真实 sql-generator 与 security-guard）。
 
     entity_dictionary：未提供 → 从 DynamoDB 构造 Aho-Corasick 匹配器；显式 None → 关闭硬通道。
     term_replacer：未提供 → 从 DynamoDB 术语库构造确定性替换源；显式 None → 规范化只做单位归一。
@@ -195,11 +196,11 @@ def build_engine(settings: AwsSettings, *, embedder=None, vector_store=None, llm
     if term_replacer is _UNSET:
         term_replacer = build_term_replacer(settings)
 
-    l4_deps = StageDependencies(
+    gen_deps = StageDependencies(
         embedder=embedder, vector_store=vector_store, llm_client=llm,
         datasource=_StarrocksDialect(), validator=None,
     )
-    l4_orch = build_orchestrator(PipelineConfig(), l4_deps)
+    gen_orch = build_orchestrator(PipelineConfig(), gen_deps)
     iso_factory = IsolationGuardFactory(policy=sungrow_table_policy())
 
     engine_deps = EngineDependencies(
@@ -208,21 +209,21 @@ def build_engine(settings: AwsSettings, *, embedder=None, vector_store=None, llm
         entity_dictionary=entity_dictionary,
         term_replacer=term_replacer,
         canonical_model_id=settings.slot_extraction_model_id or None,
-        layer4=RealLayer4Adapter(l4_orch),
+        sql_generator=RealSqlGeneratorAdapter(gen_orch),
         guard_factory=RealGuardFactoryAdapter(iso_factory),
         datasource=None,
     )
-    return QueryOrchestrator(engine_deps)
+    return QueryOrchestrator(engine_deps, observer=observer)
 
 
 def build_gateway(settings: AwsSettings, *, engine: QueryOrchestrator = None,
-                  counter_store=None) -> ThinLambda:
-    """组装 L2 ThinLambda（限流用真实 DynamoDB CounterStore）。"""
-    engine = engine or build_engine(settings)
+                  counter_store=None, observer=None) -> ThinLambda:
+    """组装 gateway ThinLambda（限流用真实 DynamoDB CounterStore）。"""
+    engine = engine or build_engine(settings, observer=observer)
     counter_store = counter_store or build_counter_store(settings)
     deps = GatewayDependencies(
         rate_limiter=RateLimiter(counter_store, default_limit=settings.user_rate_limit),
         router=RequestRouter(RuleRegistry([])),
-        engine_client=L3EngineClient(engine, settings.llm_model_id),
+        engine_client=GatewayEngineClient(engine, settings.llm_model_id),
     )
     return ThinLambda(deps)

@@ -19,7 +19,7 @@ from qe_fakes import (
     FakeEntityDictionary,
     FakeGuard,
     FakeGuardFactory,
-    FakeLayer4Client,
+    FakeSqlGeneratorClient,
     FakeLlm,
     FakeMemory,
     FakeVectorStore,
@@ -31,7 +31,7 @@ def _deps(**over):
     base = dict(
         memory=FakeMemory(), llm=FakeLlm(), embedder=FakeEmbedder(),
         vector_store=FakeVectorStore(), entity_dictionary=FakeEntityDictionary(),
-        layer4=FakeLayer4Client(), guard_factory=FakeGuardFactory(), datasource=None,
+        sql_generator=FakeSqlGeneratorClient(), guard_factory=FakeGuardFactory(), datasource=None,
     )
     base.update(over)
     return EngineDependencies(**base)
@@ -51,15 +51,15 @@ def test_fixed_node_order(deps, request_obj) -> None:
     assert nodes[:4] == [
         "context_rewrite", "term_normalization", "canonical_rewrite", "semantic_cache_lookup",
     ]
-    assert "layer4_pipeline" in nodes and "layer5_guard" in nodes
+    assert "sql_generator" in nodes and "security_guard" in nodes
 
 
 def test_cache_hit_skips_layer4_but_still_guards() -> None:
     vs = FakeVectorStore(data={CACHE_NAMESPACE: [
         {"similarity": 0.99, "pre_isolation_sql": "SELECT ps_id FROM t",
          "slots_json": _SLOTS.to_json()}]})
-    l4 = FakeLayer4Client()
-    d = _deps(vector_store=vs, layer4=l4, llm=FakeLlm(out=_CANON_JSON))
+    l4 = FakeSqlGeneratorClient()
+    d = _deps(vector_store=vs, sql_generator=l4, llm=FakeLlm(out=_CANON_JSON))
     from query_engine.models import CallerIdentity, QueryRequest
     req = QueryRequest(request_id="r", identity=CallerIdentity(user_id="1001"), raw_question="q")
     ans = QueryOrchestrator(d).run(req)
@@ -67,11 +67,11 @@ def test_cache_hit_skips_layer4_but_still_guards() -> None:
     assert ans.sql_source is QuerySource.CACHE_HIT
     assert l4.last_request is None                     # L4 被短路
     nodes = [t.node for t in ans.request_traces]
-    assert "layer5_guard" in nodes                     # 命中仍过 L5
+    assert "security_guard" in nodes                     # 命中仍过 security-guard
 
 
 def test_no_sql_answer() -> None:
-    d = _deps(layer4=FakeLayer4Client(status="no_sql"))
+    d = _deps(sql_generator=FakeSqlGeneratorClient(status="no_sql"))
     from query_engine.models import CallerIdentity, QueryRequest
     req = QueryRequest(request_id="r", identity=CallerIdentity(user_id="1001"), raw_question="q")
     ans = QueryOrchestrator(d).run(req)
@@ -80,7 +80,7 @@ def test_no_sql_answer() -> None:
 
 
 def test_upstream_error_answer() -> None:
-    d = _deps(layer4=FakeLayer4Client(status="error"))
+    d = _deps(sql_generator=FakeSqlGeneratorClient(status="error"))
     from query_engine.models import CallerIdentity, QueryRequest
     req = QueryRequest(request_id="r", identity=CallerIdentity(user_id="1001"), raw_question="q")
     ans = QueryOrchestrator(d).run(req)

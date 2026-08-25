@@ -12,10 +12,10 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Callable, Optional
 
-from api_gateway.errors import Layer2Error
+from api_gateway.errors import GatewayError
 
 
-class ConfigurationError(Layer2Error):
+class ConfigurationError(GatewayError):
     code = "BAD_REQUEST"
     http_status = 400
 

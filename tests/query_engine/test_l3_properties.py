@@ -21,7 +21,7 @@ from qe_fakes import (
     FakeEntityDictionary,
     FakeGuard,
     FakeGuardFactory,
-    FakeLayer4Client,
+    FakeSqlGeneratorClient,
     FakeLlm,
     FakeMemory,
     FakeVectorStore,
@@ -36,7 +36,7 @@ def _deps(cache_hit=False):
     )
     return EngineDependencies(
         memory=FakeMemory(), llm=FakeLlm(out=_CANON_JSON), embedder=FakeEmbedder(), vector_store=vs,
-        entity_dictionary=FakeEntityDictionary(), layer4=FakeLayer4Client(),
+        entity_dictionary=FakeEntityDictionary(), sql_generator=FakeSqlGeneratorClient(),
         guard_factory=FakeGuardFactory(), datasource=None,
     )
 
@@ -72,7 +72,7 @@ def test_cache_hit_still_guarded() -> None:
     ans = QueryOrchestrator(_deps(cache_hit=True)).run(_req("查询户用电站的装机容量"))
     nodes = [t.node for t in ans.request_traces]
     assert ans.sql_source is QuerySource.CACHE_HIT
-    assert "layer5_guard" in nodes
+    assert "security_guard" in nodes
 
 
 # Property 10：答案状态映射 —— 正常路径 OK 且有 safe_sql、无 rows

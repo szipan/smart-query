@@ -71,7 +71,7 @@ class FakeL4Result:
     unvalidated_sql: Optional[str]
 
 
-class FakeLayer4Client:
+class FakeSqlGeneratorClient:
     def __init__(self, status: str = "ok",
                  sql: str = "SELECT ps_id FROM fact_power_station_kpi_month"):
         self._status = status

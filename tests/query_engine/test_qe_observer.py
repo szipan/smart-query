@@ -10,7 +10,7 @@ def test_observer_receives_node_traces(deps, request_obj) -> None:
     nodes = [t.node for t in obs.traces]
     # 本层节点 + 下游委派均产出 trace
     for expected in ["context_rewrite", "term_normalization", "semantic_cache_lookup",
-                     "layer4_pipeline", "layer5_guard"]:
+                     "sql_generator", "security_guard"]:
         assert expected in nodes
 
 

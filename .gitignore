@@ -47,3 +47,8 @@ docs/weekly-report-*.html
 
 # 一次性临时脚本
 scripts/_tmp_*.py
+
+# Frontend
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/

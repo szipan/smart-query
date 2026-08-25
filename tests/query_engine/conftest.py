@@ -11,7 +11,7 @@ from qe_fakes import (
     FakeEmbedder,
     FakeEntityDictionary,
     FakeGuardFactory,
-    FakeLayer4Client,
+    FakeSqlGeneratorClient,
     FakeLlm,
     FakeMemory,
     FakeVectorStore,
@@ -26,7 +26,7 @@ def deps() -> EngineDependencies:
         embedder=FakeEmbedder(),
         vector_store=FakeVectorStore(),
         entity_dictionary=FakeEntityDictionary(),
-        layer4=FakeLayer4Client(),
+        sql_generator=FakeSqlGeneratorClient(),
         guard_factory=FakeGuardFactory(),
         datasource=None,  # 本期不执行
     )

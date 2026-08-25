@@ -21,7 +21,7 @@ from query_engine.deps import EngineDependencies
 from query_engine.models import AnswerStatus, CallerIdentity, QueryRequest, QuerySource
 from query_engine.orchestrator import QueryOrchestrator
 
-from qe_fakes import FakeGuardFactory, FakeLayer4Client, FakeMemory
+from qe_fakes import FakeGuardFactory, FakeSqlGeneratorClient, FakeMemory
 
 Q0 = ("导出产品线为户用的机型，电站汇总的装机容量大于1000000w的"
       "电站id、电站名称、装机容量，按照装机容量倒序")
@@ -100,7 +100,7 @@ def _deps():
     return EngineDependencies(
         memory=FakeMemory(), llm=_SlotLlm(), embedder=_TextEmbedder(), vector_store=_CosineStore(),
         entity_dictionary=None, term_replacer=_replacer(),
-        layer4=FakeLayer4Client(sql="SELECT ps_id FROM stations /*pre-iso*/"),
+        sql_generator=FakeSqlGeneratorClient(sql="SELECT ps_id FROM stations /*pre-iso*/"),
         guard_factory=FakeGuardFactory(), datasource=None,
     )
 
@@ -120,8 +120,8 @@ def test_synonym_variant_hits_when_slots_match():
     _store_q0(orch)
     ans = orch.run(_req(V_SYNONYM))
     assert ans.sql_source is QuerySource.CACHE_HIT   # 同义词变体：canonical+slots 一致 → 命中
-    assert "layer5_guard" in [t.node for t in ans.request_traces]   # 命中仍过 L5
-    assert "layer4_pipeline" not in [t.node for t in ans.request_traces]
+    assert "security_guard" in [t.node for t in ans.request_traces]   # 命中仍过 security-guard
+    assert "sql_generator" not in [t.node for t in ans.request_traces]
 
 
 def test_order_word_variant_hits():
@@ -144,5 +144,5 @@ def test_property12_cache_key_and_l4_question_are_canonical():
     stored = [e["question"] for _ns, e in deps.vector_store._items]
     assert len(stored) == 1
     canonical = stored[0]
-    assert deps.layer4.last_request.standalone_question == canonical   # 传 L4 == 缓存键
+    assert deps.sql_generator.last_request.standalone_question == canonical   # 传 sql_generator == 缓存键
     assert canonical == _FIXED_CANON

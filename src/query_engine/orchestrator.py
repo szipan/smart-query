@@ -14,7 +14,7 @@ from __future__ import annotations
 import time
 from typing import Optional
 
-from query_engine.deps import EngineDependencies, Layer4Request
+from query_engine.deps import EngineDependencies, SqlGeneratorRequest
 from query_engine.models import (
     Answer,
     AnswerStatus,
@@ -61,30 +61,40 @@ class QueryOrchestrator:
             trace = NodeTrace(node=name, started_at=started, ended_at=time.monotonic(), ok=ok, error=err)
             ctx.traces.append(trace)
             self._obs.on_node(trace)
+            # 增强日志：如 observer 支持 on_node_with_context 则调用（VerboseEngineObserver）
+            if hasattr(self._obs, 'on_node_with_context'):
+                self._obs.on_node_with_context(trace, ctx)
 
     def run(self, request: QueryRequest) -> Answer:
         ctx = QueryContext(request=request)
 
-        # ① 上下文改写
-        self._node(ctx, "context_rewrite", self._rewriter.run)
-        # ② 术语归一化
-        self._node(ctx, "term_normalization", self._term.run)
-        # ③ 规范化改写（→ canonical_question）
-        self._node(ctx, "canonical_rewrite", self._canonical.run)
-        # ④ 语义缓存 lookup（键 = canonical_question）
-        self._node(ctx, "semantic_cache_lookup", self._lookup_node)
+        try:
+            # ① 上下文改写
+            self._node(ctx, "context_rewrite", self._rewriter.run)
+            # ② 术语归一化
+            self._node(ctx, "term_normalization", self._term.run)
+            # ③ 规范化改写（→ canonical_question）
+            self._node(ctx, "canonical_rewrite", self._canonical.run)
+            # ④ 语义缓存 lookup（键 = canonical_question）
+            self._node(ctx, "semantic_cache_lookup", self._lookup_node)
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            return Answer(request_id=request.request_id, status=AnswerStatus.UPSTREAM_ERROR,
+                          message=f"流水线节点异常: {type(e).__name__}: {e}",
+                          request_traces=tuple(ctx.traces))
 
-        # ⑤ 分支：命中短路 L4，未命中走 L4；两分支都进 L5
+        # ⑤ 分支：命中短路 sql-generator，未命中走 sql-generator；两分支都进 security-guard
         if ctx.cache_lookup and ctx.cache_lookup.hit:
             ctx.pre_isolation_sql = ctx.cache_lookup.pre_isolation_sql
             ctx.sql_source = QuerySource.CACHE_HIT
         else:
-            terminal = self._invoke_layer4(ctx)
+            terminal = self._invoke_sql_generator(ctx)
             if terminal is not None:
                 return self._finalize(ctx, terminal)
 
-        # ⑥ Layer 5 守卫（命中/未命中都经此）
-        terminal = self._invoke_layer5(ctx)
+        # ⑥ security-guard（命中/未命中都经此）
+        terminal = self._invoke_security_guard(ctx)
         if terminal is not None:
             return self._finalize(ctx, terminal)
 
@@ -115,11 +125,11 @@ class QueryOrchestrator:
             ctx.cache_lookup = None
             ctx.warnings.append(f"缓存 lookup 失败按未命中处理: {e!r}")
 
-    # ---- 委派 Layer 4 ----
-    def _invoke_layer4(self, ctx: QueryContext) -> Optional[Answer]:
+    # ---- 委派 sql-generator ----
+    def _invoke_sql_generator(self, ctx: QueryContext) -> Optional[Answer]:
         req = ctx.request
         started = time.monotonic()
-        l4req = Layer4Request(
+        gen_req = SqlGeneratorRequest(
             request_id=req.request_id,
             standalone_question=ctx.canonical_question or ctx.standalone_question or req.raw_question,
             resolved_entities=tuple(ctx.resolved_entities),
@@ -127,13 +137,16 @@ class QueryOrchestrator:
             datasource_id=req.datasource_id,
             model_id=req.model_id,
         )
-        result = self._deps.layer4.generate(l4req)
+        result = self._deps.sql_generator.generate(gen_req)
         status = _status_str(result.status)
-        self._trace_downstream(ctx, "layer4_pipeline", started, {"status": status})
 
         if status == "ok":
             ctx.pre_isolation_sql = result.unvalidated_sql
             ctx.sql_source = QuerySource.PIPELINE
+
+        self._trace_downstream(ctx, "sql_generator", started, {"status": status})
+
+        if status == "ok":
             return None
         if status == "no_sql":
             return Answer(request_id=req.request_id, status=AnswerStatus.NO_SQL,
@@ -142,27 +155,29 @@ class QueryOrchestrator:
         return Answer(request_id=req.request_id, status=AnswerStatus.UPSTREAM_ERROR,
                       message="生成查询时出错", request_traces=tuple(ctx.traces))
 
-    # ---- 委派 Layer 5（每请求按身份构造，统一入口）----
-    def _invoke_layer5(self, ctx: QueryContext) -> Optional[Answer]:
+    # ---- 委派 security-guard（每请求按身份构造，统一入口）----
+    def _invoke_security_guard(self, ctx: QueryContext) -> Optional[Answer]:
         req = ctx.request
         started = time.monotonic()
         guard = self._deps.guard_factory.for_identity(req.identity)  # 身份逐字段透传
         gr = guard.guard(ctx.pre_isolation_sql, req.request_id)
         ctx.guard_result = gr
         gstatus = _status_str(gr.status)
-        self._trace_downstream(ctx, "layer5_guard", started, {"status": gstatus})
+        ctx.safe_sql = getattr(gr, "safe_sql", None)
+        self._trace_downstream(ctx, "security_guard", started, {"status": gstatus})
 
         if gstatus != "allowed":
             return Answer(request_id=req.request_id, status=AnswerStatus.REJECTED,
                           message="查询被安全策略拒绝", sql_source=ctx.sql_source,
                           request_traces=tuple(ctx.traces))
-        ctx.safe_sql = getattr(gr, "safe_sql", None)
         return None
 
     def _trace_downstream(self, ctx: QueryContext, name: str, started: float, attrs: dict) -> None:
         trace = NodeTrace(node=name, started_at=started, ended_at=time.monotonic(), ok=True, attrs=attrs)
         ctx.traces.append(trace)
         self._obs.on_node(trace)
+        if hasattr(self._obs, 'on_node_with_context'):
+            self._obs.on_node_with_context(trace, ctx)
 
     # ---- 收尾：写回 Memory（best-effort）+ 附 traces ----
     def _finalize(self, ctx: QueryContext, answer: Answer) -> Answer:

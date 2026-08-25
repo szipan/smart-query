@@ -58,13 +58,13 @@ class _Memory:
 def _l3_orchestrator() -> QueryOrchestrator:
     deps = EngineDependencies(
         memory=_Memory(), llm=None, embedder=None, vector_store=None,
-        entity_dictionary=None, layer4=_L4(), guard_factory=_GuardFactory(), datasource=None,
+        entity_dictionary=None, sql_generator=_L4(), guard_factory=_GuardFactory(), datasource=None,
     )
     return QueryOrchestrator(deps)
 
 
 # ---- L2 侧 EngineClient 适配器：把 L2 请求转 L3，运行 L3，返回数据 ----
-class L3EngineClient:
+class GatewayEngineClient:
     def __init__(self, orchestrator: QueryOrchestrator) -> None:
         self._o = orchestrator
 
@@ -85,7 +85,7 @@ def _deps() -> GatewayDependencies:
     return GatewayDependencies(
         rate_limiter=RateLimiter(InMemoryCounterStore(), default_limit=100),
         router=RequestRouter(RuleRegistry([])),
-        engine_client=L3EngineClient(_l3_orchestrator()),
+        engine_client=GatewayEngineClient(_l3_orchestrator()),
     )
 
 
